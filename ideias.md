@@ -136,3 +136,33 @@
 * Declarative VM configuration in Nix.
 * Spot-to-on-demand fallback policy.
 * Full cluster simulation locally via QEMU.
+
+---
+
+13. Scaling Strategies Without Containers
+
+This system supports three scaling strategies without relying on containers:
+
+A. Multiple Workloads on Same Machine
+
+Use systemd template units (e.g., myapp@1.service, myapp@2.service).
+
+Each unit runs isolated with different ports or parameters.
+
+Efficient use of multicore machines.
+
+B. Same Workload on Multiple Machines
+
+Deploy same flake config to other machines.
+
+Horizontal scaling through replication across machines.
+
+Often paired with load balancing.
+
+C. Hybrid Strategy
+
+Combine vertical scaling (multiple units per machine) and horizontal scaling (more machines).
+
+Provides fault tolerance, parallelism, and cost efficiency.
+
+
