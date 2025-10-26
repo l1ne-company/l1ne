@@ -1,0 +1,23 @@
+[Unit]
+Description=Dummy Test Service for Development
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/faas-service
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=faas-service
+
+# Resource limits (optional)
+MemoryMax=50M
+CPUQuota=10%
+
+# Security settings
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
