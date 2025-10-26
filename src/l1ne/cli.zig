@@ -152,7 +152,7 @@ const CLIArgs = union(enum) {
     benchmark: Benchmark,
 
     pub const help =
-        \\L1NE - Proof of Concept
+        \\L1NE
         \\
         \\Usage:
         \\  l1ne [-h | --help]
