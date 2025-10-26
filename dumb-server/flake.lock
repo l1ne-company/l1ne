@@ -1,0 +1,61 @@
+{
+  "nodes": {
+    "crane": {
+      "locked": {
+        "lastModified": 1758758545,
+        "narHash": "sha256-NU5WaEdfwF6i8faJ2Yh+jcK9vVFrofLcwlD/mP65JrI=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "95d528a5f54eaba0d12102249ce42f4d01f4e364",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1759036355,
+        "narHash": "sha256-0m27AKv6ka+q270dw48KflE0LwQYrO7Fm4/2//KCVWg=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e9f00bd893984bc8ce46c895c3bf7cac95331127",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "rust-module": "rust-module"
+      }
+    },
+    "rust-module": {
+      "inputs": {
+        "crane": "crane"
+      },
+      "locked": {
+        "lastModified": 1759243670,
+        "narHash": "sha256-9gOVcJnwexUzpgzogrW4rCaARl9hcHYAYt2SWi4HYdM=",
+        "owner": "l1ne-company",
+        "repo": "rust-module",
+        "rev": "8ed8800c17e48f3f6cdc450b99622a9212e80f5f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "l1ne-company",
+        "repo": "rust-module",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

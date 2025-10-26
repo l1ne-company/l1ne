@@ -1,2 +1,0 @@
-- TigerStyle[https://github.com/tigerbeetle/tigerbeetle/blob/main/docs/TIGER_STYLE.md]
-- NASA power of ten[https://spinroot.com/gerard/pdf/P10.pdf]

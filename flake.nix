@@ -1,5 +1,5 @@
 {
-  description = "setup-dev";
+  description = "setup-dev-zig-0-15-1";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
 
