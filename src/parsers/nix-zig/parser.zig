@@ -670,27 +670,50 @@ pub const Parser = struct {
         const dot = try self.expect(.TOKEN_DOT);
         try node.addChild(dot);
 
-        // Parse attribute name or dynamic attribute - wrap in ATTRPATH
+        // Parse attribute path - may have multiple parts like b.c.d
         const attrpath_start = self.current_token.start;
         const attrpath = try self.makeNode(.NODE_ATTRPATH, attrpath_start);
         errdefer attrpath.deinit();
 
+        var last_end: usize = dot.end;
+
+        // Parse first attribute
         if (self.peek() == .TOKEN_IDENT) {
             const attr = try self.parseIdent();
             try attrpath.addChild(attr);
-            finishNode(attrpath, attr.end);
-            try node.addChild(attrpath);
-            finishNode(node, attr.end);
+            last_end = attr.end;
         } else if (self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_L_BRACE) {
             const attr = try self.parsePrefix();
             try attrpath.addChild(attr);
-            finishNode(attrpath, attr.end);
-            try node.addChild(attrpath);
-            finishNode(node, attr.end);
+            last_end = attr.end;
         } else {
-            attrpath.deinit(); // Don't need it if there's no attribute
+            attrpath.deinit();
             finishNode(node, dot.end);
+            return node;
         }
+
+        // Continue parsing additional .attr parts
+        while (self.peek() == .TOKEN_DOT) {
+            const next_dot = try self.consumeToken();
+            try attrpath.addChild(next_dot);
+            last_end = next_dot.end;
+
+            if (self.peek() == .TOKEN_IDENT) {
+                const attr = try self.parseIdent();
+                try attrpath.addChild(attr);
+                last_end = attr.end;
+            } else if (self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_L_BRACE) {
+                const attr = try self.parsePrefix();
+                try attrpath.addChild(attr);
+                last_end = attr.end;
+            } else {
+                break;
+            }
+        }
+
+        finishNode(attrpath, last_end);
+        try node.addChild(attrpath);
+        finishNode(node, last_end);
 
         // Check for 'or' default
         if (self.peek() == .TOKEN_WHITESPACE) {
@@ -698,6 +721,11 @@ pub const Parser = struct {
             const saved_token = self.current_token;
             try self.skipWs();
             if (self.peek() == .TOKEN_OR) {
+                // Restore and properly consume whitespace as a token
+                self.tokenizer.restoreState(saved_state);
+                self.current_token = saved_token;
+                try self.consumeWs(node);
+
                 const or_tok = try self.consumeToken();
                 try node.addChild(or_tok);
                 try self.consumeWs(node);
