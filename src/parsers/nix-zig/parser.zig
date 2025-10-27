@@ -370,6 +370,20 @@ pub const Parser = struct {
                     continue;
                 }
 
+                // Check for has-attr (? operator) after whitespace
+                if (next_token == .TOKEN_QUESTION) {
+                    if (@intFromEnum(Precedence.HAS_ATTR) <= @intFromEnum(min_prec)) break;
+                    left = try self.parseHasAttr(left);
+                    continue;
+                }
+
+                // Check for select (. operator) after whitespace
+                if (next_token == .TOKEN_DOT) {
+                    if (@intFromEnum(Precedence.SELECT) <= @intFromEnum(min_prec)) break;
+                    left = try self.parseSelect(left);
+                    continue;
+                }
+
                 // Check for function application
                 const can_apply = switch (next_token) {
                     .TOKEN_IDENT,
@@ -672,6 +686,7 @@ pub const Parser = struct {
         errdefer node.deinit();
 
         try node.addChild(left);
+        try self.consumeWs(node);
 
         const dot = try self.expect(.TOKEN_DOT);
         try node.addChild(dot);
@@ -753,9 +768,11 @@ pub const Parser = struct {
         errdefer node.deinit();
 
         try node.addChild(left);
+        try self.consumeWs(node);
 
         const question = try self.expect(.TOKEN_QUESTION);
         try node.addChild(question);
+        try self.consumeWs(node);
 
         // Parse attribute path
         const attrpath_start = self.current_token.start;
