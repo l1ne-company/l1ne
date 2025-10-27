@@ -41,8 +41,7 @@ fn getInfixPrecedence(kind: TokenKind) ?Precedence {
         .TOKEN_ADD, .TOKEN_SUB => .SUM,
         .TOKEN_MUL, .TOKEN_DIV => .PRODUCT,
         .TOKEN_CONCAT => .CONCAT,
-        .TOKEN_QUESTION => .HAS_ATTR,
-        // NOTE: DOT is NOT here - it's handled specially by parseSelect
+        // NOTE: QUESTION and DOT are NOT here - handled specially by parseHasAttr and parseSelect
         else => null,
     };
 }
@@ -406,6 +405,13 @@ pub const Parser = struct {
                 continue;
             }
 
+            // Check for has-attr (? operator)
+            if (self.peek() == .TOKEN_QUESTION) {
+                if (@intFromEnum(Precedence.HAS_ATTR) <= @intFromEnum(min_prec)) break;
+                left = try self.parseHasAttr(left);
+                continue;
+            }
+
             // Check for select (. operator)
             if (self.peek() == .TOKEN_DOT) {
                 if (@intFromEnum(Precedence.SELECT) <= @intFromEnum(min_prec)) break;
@@ -737,6 +743,42 @@ pub const Parser = struct {
                 self.current_token = saved_token;
             }
         }
+
+        return node;
+    }
+
+    fn parseHasAttr(self: *Parser, left: *Node) ParseError!*Node {
+        const start = left.start;
+        const node = try self.makeNode(.NODE_HAS_ATTR, start);
+        errdefer node.deinit();
+
+        try node.addChild(left);
+
+        const question = try self.expect(.TOKEN_QUESTION);
+        try node.addChild(question);
+
+        // Parse attribute path
+        const attrpath_start = self.current_token.start;
+        const attrpath = try self.makeNode(.NODE_ATTRPATH, attrpath_start);
+        errdefer attrpath.deinit();
+
+        // Parse the attribute (identifier, string, or dynamic)
+        if (self.peek() == .TOKEN_IDENT) {
+            const attr = try self.parseIdent();
+            try attrpath.addChild(attr);
+            finishNode(attrpath, attr.end);
+        } else if (self.peek() == .TOKEN_STRING_START) {
+            const attr = try self.parseString();
+            try attrpath.addChild(attr);
+            finishNode(attrpath, attr.end);
+        } else {
+            attrpath.deinit();
+            finishNode(node, question.end);
+            return node;
+        }
+
+        try node.addChild(attrpath);
+        finishNode(node, attrpath.end);
 
         return node;
     }
