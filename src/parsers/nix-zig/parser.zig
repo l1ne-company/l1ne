@@ -576,7 +576,9 @@ pub const Parser = struct {
 
     fn parseLiteral(self: *Parser) ParseError!*Node {
         const start = self.current_token.start;
-        const node = try self.makeNode(.NODE_LITERAL, start);
+        // Paths get their own node type
+        const node_kind: NodeKind = if (self.peek() == .TOKEN_PATH) .NODE_PATH else .NODE_LITERAL;
+        const node = try self.makeNode(node_kind, start);
         const tok = try self.consumeToken();
         try node.addChild(tok);
         finishNode(node, tok.end);
