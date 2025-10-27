@@ -42,7 +42,7 @@ fn getInfixPrecedence(kind: TokenKind) ?Precedence {
         .TOKEN_MUL, .TOKEN_DIV => .PRODUCT,
         .TOKEN_CONCAT => .CONCAT,
         .TOKEN_QUESTION => .HAS_ATTR,
-        .TOKEN_DOT => .SELECT,
+        // NOTE: DOT is NOT here - it's handled specially by parseSelect
         else => null,
     };
 }
@@ -670,16 +670,25 @@ pub const Parser = struct {
         const dot = try self.expect(.TOKEN_DOT);
         try node.addChild(dot);
 
-        // Parse attribute name or dynamic attribute
+        // Parse attribute name or dynamic attribute - wrap in ATTRPATH
+        const attrpath_start = self.current_token.start;
+        const attrpath = try self.makeNode(.NODE_ATTRPATH, attrpath_start);
+        errdefer attrpath.deinit();
+
         if (self.peek() == .TOKEN_IDENT) {
             const attr = try self.parseIdent();
-            try node.addChild(attr);
+            try attrpath.addChild(attr);
+            finishNode(attrpath, attr.end);
+            try node.addChild(attrpath);
             finishNode(node, attr.end);
         } else if (self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_L_BRACE) {
             const attr = try self.parsePrefix();
-            try node.addChild(attr);
+            try attrpath.addChild(attr);
+            finishNode(attrpath, attr.end);
+            try node.addChild(attrpath);
             finishNode(node, attr.end);
         } else {
+            attrpath.deinit(); // Don't need it if there's no attribute
             finishNode(node, dot.end);
         }
 
