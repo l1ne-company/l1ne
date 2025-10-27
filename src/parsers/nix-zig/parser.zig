@@ -184,6 +184,10 @@ pub const Parser = struct {
                     return lambda_node;
                 } else if (self.peek() == .TOKEN_AT) {
                     // It's a bind-left lambda: ident @ pattern: expr
+                    // Restore state to consume whitespace properly
+                    self.tokenizer.restoreState(saved_state);
+                    self.current_token = saved_token;
+
                     const lambda_node = try self.makeNode(.NODE_LAMBDA, left.start);
                     errdefer lambda_node.deinit();
 
@@ -221,9 +225,30 @@ pub const Parser = struct {
 
                             const name = try self.parseIdent();
                             try entry.addChild(name);
-                            try self.consumeWs(entry);
 
-                            if (self.peek() == .TOKEN_QUESTION) {
+                            // Only consume whitespace if followed by ?
+                            if (self.peek() == .TOKEN_WHITESPACE) {
+                                const entry_saved_state = self.tokenizer.saveState();
+                                const entry_saved_token = self.current_token;
+                                try self.skipWs();
+                                if (self.peek() == .TOKEN_QUESTION) {
+                                    // Restore and consume whitespace as part of entry
+                                    self.tokenizer.restoreState(entry_saved_state);
+                                    self.current_token = entry_saved_token;
+                                    try self.consumeWs(entry);
+
+                                    const question = try self.consumeToken();
+                                    try entry.addChild(question);
+                                    try self.consumeWs(entry);
+
+                                    const default = try self.parseExpression(.LOWEST);
+                                    try entry.addChild(default);
+                                } else {
+                                    // No ?, restore state and don't consume whitespace into entry
+                                    self.tokenizer.restoreState(entry_saved_state);
+                                    self.current_token = entry_saved_token;
+                                }
+                            } else if (self.peek() == .TOKEN_QUESTION) {
                                 const question = try self.consumeToken();
                                 try entry.addChild(question);
                                 try self.consumeWs(entry);
@@ -232,7 +257,7 @@ pub const Parser = struct {
                                 try entry.addChild(default);
                             }
 
-                            finishNode(entry, if (entry.children.items.len > 0) entry.children.items[entry.children.items.len - 1].end else name.end);
+                            finishNode(entry, if (entry.children.items.len > 1) entry.children.items[entry.children.items.len - 1].end else name.end);
                             try pattern_node.addChild(entry);
 
                             try self.consumeWs(pattern_node);
@@ -875,17 +900,10 @@ pub const Parser = struct {
         errdefer node.deinit();
 
         // Parse pattern or identifier parameter
-        if (self.peek() == .TOKEN_L_BRACE or self.peek() == .TOKEN_L_PAREN) {
+        // Always call parsePattern, it will handle identifiers and pattern binds
+        if (self.peek() == .TOKEN_L_BRACE or self.peek() == .TOKEN_L_PAREN or self.peek() == .TOKEN_IDENT) {
             const pattern = try self.parsePattern();
             try node.addChild(pattern);
-        } else if (self.peek() == .TOKEN_IDENT) {
-            // Wrap identifier parameter in NODE_IDENT_PARAM
-            const param_node = try self.makeNode(.NODE_IDENT_PARAM, self.current_token.start);
-            errdefer param_node.deinit();
-            const ident = try self.parseIdent();
-            try param_node.addChild(ident);
-            finishNode(param_node, ident.end);
-            try node.addChild(param_node);
         }
 
         try self.consumeWs(node);
@@ -930,9 +948,30 @@ pub const Parser = struct {
 
                 const name = try self.parseIdent();
                 try entry.addChild(name);
-                try self.consumeWs(entry);
 
-                if (self.peek() == .TOKEN_QUESTION) {
+                // Only consume whitespace if followed by ?
+                if (self.peek() == .TOKEN_WHITESPACE) {
+                    const pattern_entry_saved_state = self.tokenizer.saveState();
+                    const pattern_entry_saved_token = self.current_token;
+                    try self.skipWs();
+                    if (self.peek() == .TOKEN_QUESTION) {
+                        // Restore and consume whitespace as part of entry
+                        self.tokenizer.restoreState(pattern_entry_saved_state);
+                        self.current_token = pattern_entry_saved_token;
+                        try self.consumeWs(entry);
+
+                        const question = try self.consumeToken();
+                        try entry.addChild(question);
+                        try self.consumeWs(entry);
+
+                        const default = try self.parseExpression(.LOWEST);
+                        try entry.addChild(default);
+                    } else {
+                        // No ?, restore state and don't consume whitespace into entry
+                        self.tokenizer.restoreState(pattern_entry_saved_state);
+                        self.current_token = pattern_entry_saved_token;
+                    }
+                } else if (self.peek() == .TOKEN_QUESTION) {
                     const question = try self.consumeToken();
                     try entry.addChild(question);
                     try self.consumeWs(entry);
@@ -941,10 +980,11 @@ pub const Parser = struct {
                     try entry.addChild(default);
                 }
 
-                finishNode(entry, if (entry.children.items.len > 0) entry.children.items[entry.children.items.len - 1].end else name.end);
+                finishNode(entry, if (entry.children.items.len > 1) entry.children.items[entry.children.items.len - 1].end else name.end);
                 try node.addChild(entry);
 
                 try self.consumeWs(node);
+
                 if (self.peek() == .TOKEN_COMMA) {
                     const comma = try self.consumeToken();
                     try node.addChild(comma);
@@ -963,23 +1003,64 @@ pub const Parser = struct {
                 finishNode(node, self.current_token.start);
             }
 
-            // Check for @ binding
+            // Check for @ binding (right side: pattern @ ident)
             try self.consumeWs(node);
             if (self.peek() == .TOKEN_AT) {
-                const at_node = try self.makeNode(.NODE_PAT_BIND, node.start);
+                const at_node = try self.makeNode(.NODE_PAT_BIND, self.current_token.start);
+                errdefer at_node.deinit();
+
                 const at = try self.consumeToken();
-                try at_node.addChild(node);
                 try at_node.addChild(at);
                 try self.consumeWs(at_node);
 
                 const ident = try self.parseIdent();
                 try at_node.addChild(ident);
                 finishNode(at_node, ident.end);
-                return at_node;
+
+                // Add bind node to pattern
+                try node.addChild(at_node);
+                finishNode(node, at_node.end);
             }
         } else if (self.peek() == .TOKEN_IDENT) {
-            // Simple identifier parameter
+            // Could be simple identifier or "ident @ pattern"
             const ident = try self.parseIdent();
+
+            // Check for @ binding (left side: ident @ pattern)
+            if (self.peek() == .TOKEN_WHITESPACE or self.peek() == .TOKEN_AT) {
+                // Save state to check if this is really a pattern bind
+                const saved_state = self.tokenizer.saveState();
+                const saved_token = self.current_token;
+
+                // Skip whitespace and check for @
+                try self.skipWs();
+                if (self.peek() == .TOKEN_AT) {
+                    // Yes, it's a pattern bind!
+                    // Restore and build the bind node
+                    self.tokenizer.restoreState(saved_state);
+                    self.current_token = saved_token;
+
+                    const at_node = try self.makeNode(.NODE_PAT_BIND, ident.start);
+                    errdefer at_node.deinit();
+
+                    try at_node.addChild(ident);
+                    try self.consumeWs(at_node);
+
+                    const at = try self.consumeToken();
+                    try at_node.addChild(at);
+                    try self.consumeWs(at_node);
+
+                    // Parse the pattern after @
+                    const pattern = try self.parsePattern();
+                    try at_node.addChild(pattern);
+                    finishNode(at_node, pattern.end);
+                    return at_node;
+                } else {
+                    // Not a pattern bind, restore state
+                    self.tokenizer.restoreState(saved_state);
+                    self.current_token = saved_token;
+                }
+            }
+
             return ident;
         }
 
