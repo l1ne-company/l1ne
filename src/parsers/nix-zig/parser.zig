@@ -47,6 +47,28 @@ fn getInfixPrecedence(kind: TokenKind) ?Precedence {
     };
 }
 
+/// Get the precedence level immediately before the given precedence
+fn getPrecedenceBefore(prec: Precedence) Precedence {
+    return switch (prec) {
+        .LOWEST => .LOWEST,
+        .PIPE => .LOWEST,
+        .IMPLICATION => .PIPE,
+        .OR => .IMPLICATION,
+        .AND => .OR,
+        .EQUALITY => .AND,
+        .COMPARISON => .EQUALITY,
+        .UPDATE => .COMPARISON,
+        .NOT => .UPDATE,
+        .SUM => .NOT,
+        .PRODUCT => .SUM,
+        .CONCAT => .PRODUCT,
+        .HAS_ATTR => .CONCAT,
+        .NEGATE => .HAS_ATTR,
+        .CALL => .NEGATE,
+        .SELECT => .CALL,
+    };
+}
+
 pub const Parser = struct {
     tokenizer: Tokenizer,
     allocator: std.mem.Allocator,
@@ -589,12 +611,33 @@ pub const Parser = struct {
         try self.consumeWs(node);
 
         const op_tok = try self.consumeToken();
+        const op_kind = op_tok.kind;
         try node.addChild(op_tok);
         try self.consumeWs(node);
 
+        // Check if operator is right-associative
+        const is_right_assoc = switch (op_kind) {
+            .token => |t| switch (t) {
+                .TOKEN_CONCAT, // ++
+                .TOKEN_UPDATE, // //
+                .TOKEN_IMPLICATION, // ->
+                .TOKEN_PIPE_LEFT, // <|
+                => true,
+                else => false,
+            },
+            else => false,
+        };
+
+        // For right-associative operators, parse right side with one level lower precedence
+        // This allows the same operator to bind tighter on the right: a ++ b ++ c -> a ++ (b ++ c)
         // For left-associative operators, parse right side with same precedence
-        // For right-associative (like ->), would use lower precedence
-        const right = try self.parseExpression(prec);
+        // This makes them bind from left to right: a + b + c -> (a + b) + c
+        const right_prec: Precedence = if (is_right_assoc)
+            getPrecedenceBefore(prec)
+        else
+            prec;
+
+        const right = try self.parseExpression(right_prec);
         try node.addChild(right);
 
         finishNode(node, right.end);
@@ -1053,10 +1096,32 @@ pub const Parser = struct {
             try self.consumeWs(node);
         }
 
-        // Parse inherited names
-        while (self.peek() == .TOKEN_IDENT) {
-            const ident = try self.parseIdent();
-            try node.addChild(ident);
+        // Parse inherited attributes (identifiers, strings, or dynamic)
+        while (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_INTERPOL_START) {
+            if (self.peek() == .TOKEN_IDENT) {
+                const ident = try self.parseIdent();
+                try node.addChild(ident);
+            } else if (self.peek() == .TOKEN_STRING_START) {
+                const str = try self.parseString();
+                try node.addChild(str);
+            } else if (self.peek() == .TOKEN_INTERPOL_START) {
+                // Dynamic attribute ${expr}
+                const dyn_node = try self.makeNode(.NODE_DYNAMIC, self.current_token.start);
+                errdefer dyn_node.deinit();
+
+                const interp_start = try self.expect(.TOKEN_INTERPOL_START);
+                try dyn_node.addChild(interp_start);
+
+                const expr = try self.parseExpression(.LOWEST);
+                try dyn_node.addChild(expr);
+
+                try self.consumeWs(dyn_node);
+                const interp_end = try self.expect(.TOKEN_INTERPOL_END);
+                try dyn_node.addChild(interp_end);
+
+                finishNode(dyn_node, interp_end.end);
+                try node.addChild(dyn_node);
+            }
             try self.consumeWs(node);
         }
 

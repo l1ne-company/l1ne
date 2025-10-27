@@ -384,6 +384,12 @@ pub const Tokenizer = struct {
         }
 
         if (self.current() == '/' or self.startsWith("./") or self.startsWith("../")) {
+            // Don't treat // as a path - it's the update operator
+            if (self.startsWith("//")) {
+                self.pos = saved_pos;
+                return null;
+            }
+
             // Consume path
             while (self.current()) |ch| {
                 if (isWhitespace(ch) or ch == ';' or ch == ')' or ch == ']' or ch == '}' or ch == ':') break;
