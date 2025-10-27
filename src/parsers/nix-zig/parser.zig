@@ -1075,7 +1075,8 @@ pub const Parser = struct {
 
         // Check for (source)
         if (self.peek() == .TOKEN_L_PAREN) {
-            const from_node = try self.makeNode(.NODE_INHERIT_FROM, start);
+            const from_start = self.current_token.start;
+            const from_node = try self.makeNode(.NODE_INHERIT_FROM, from_start);
             errdefer from_node.deinit();
 
             const lparen = try self.consumeToken();
