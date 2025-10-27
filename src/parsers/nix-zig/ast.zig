@@ -112,6 +112,7 @@ pub const NodeKind = enum {
     NODE_PATTERN,
     NODE_PAT_BIND,
     NODE_PAT_ENTRY,
+    NODE_IDENT_PARAM,
 };
 
 pub const NodeType = union(enum) {

@@ -166,7 +166,14 @@ pub const Parser = struct {
                     // It's a simple lambda: ident: expr
                     const lambda_node = try self.makeNode(.NODE_LAMBDA, left.start);
                     errdefer lambda_node.deinit();
-                    try lambda_node.addChild(left);
+
+                    // Wrap identifier in NODE_IDENT_PARAM
+                    const param_node = try self.makeNode(.NODE_IDENT_PARAM, left.start);
+                    errdefer param_node.deinit();
+                    try param_node.addChild(left);
+                    finishNode(param_node, left.end);
+
+                    try lambda_node.addChild(param_node);
                     try self.consumeWs(lambda_node);
                     const colon = try self.consumeToken();
                     try lambda_node.addChild(colon);
@@ -263,7 +270,14 @@ pub const Parser = struct {
                 // Lambda without whitespace: ident:expr
                 const lambda_node = try self.makeNode(.NODE_LAMBDA, left.start);
                 errdefer lambda_node.deinit();
-                try lambda_node.addChild(left);
+
+                // Wrap identifier in NODE_IDENT_PARAM
+                const param_node = try self.makeNode(.NODE_IDENT_PARAM, left.start);
+                errdefer param_node.deinit();
+                try param_node.addChild(left);
+                finishNode(param_node, left.end);
+
+                try lambda_node.addChild(param_node);
                 const colon = try self.consumeToken();
                 try lambda_node.addChild(colon);
                 try self.consumeWs(lambda_node);
@@ -860,13 +874,18 @@ pub const Parser = struct {
         const node = try self.makeNode(.NODE_LAMBDA, start);
         errdefer node.deinit();
 
-        // Parse pattern
+        // Parse pattern or identifier parameter
         if (self.peek() == .TOKEN_L_BRACE or self.peek() == .TOKEN_L_PAREN) {
             const pattern = try self.parsePattern();
             try node.addChild(pattern);
         } else if (self.peek() == .TOKEN_IDENT) {
-            const param = try self.parseIdent();
-            try node.addChild(param);
+            // Wrap identifier parameter in NODE_IDENT_PARAM
+            const param_node = try self.makeNode(.NODE_IDENT_PARAM, self.current_token.start);
+            errdefer param_node.deinit();
+            const ident = try self.parseIdent();
+            try param_node.addChild(ident);
+            finishNode(param_node, ident.end);
+            try node.addChild(param_node);
         }
 
         try self.consumeWs(node);
