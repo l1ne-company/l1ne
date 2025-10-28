@@ -181,9 +181,28 @@ pub const Tokenizer = struct {
 
         const ch = self.current().?;
 
-        // Whitespace
+        // Whitespace - split at newline boundaries
         if (isWhitespace(ch)) {
-            self.consumeWhile(isWhitespace);
+            if (ch == '\n' or ch == '\r') {
+                // Consume newline + following spaces/tabs (indentation)
+                self.advance();
+                while (self.current()) |c| {
+                    if (c == ' ' or c == '\t') {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            } else {
+                // Consume spaces/tabs until newline or non-whitespace
+                while (self.current()) |c| {
+                    if (c == ' ' or c == '\t') {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+            }
             return .{ .kind = .TOKEN_WHITESPACE, .start = start, .end = self.pos };
         }
 

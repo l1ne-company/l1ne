@@ -141,13 +141,20 @@ pub const Parser = struct {
         const root = try self.makeNode(.NODE_ROOT, 0);
         errdefer root.deinit();
 
+        // Consume leading trivia into root
+        try self.consumeWs(root);
+
         const expr = try self.parseExpression(.LOWEST);
         try root.addChild(expr);
 
-        // Consume trailing trivia, but NOT the final newline
+        // Consume trailing trivia, but NOT the final newline token
         while (self.peek() == .TOKEN_WHITESPACE or self.peek() == .TOKEN_COMMENT) {
-            // Stop before whitespace that extends to EOF (the final newline)
-            if (self.peek() == .TOKEN_WHITESPACE and self.current_token.end >= self.source.len) {
+            // Stop before whitespace that is just the final newline
+            // (whitespace tokens are now split at newline boundaries, so "\n" is separate)
+            if (self.peek() == .TOKEN_WHITESPACE and
+                self.source.len > 0 and
+                self.current_token.start == self.source.len - 1 and
+                self.source[self.source.len - 1] == '\n') {
                 break;
             }
             const trivia = try self.consumeToken();
