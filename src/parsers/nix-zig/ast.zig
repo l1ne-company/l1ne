@@ -94,6 +94,7 @@ pub const NodeKind = enum {
     NODE_HAS_ATTR,
     NODE_IF_ELSE,
     NODE_LET_IN,
+    NODE_LEGACY_LET,
     NODE_WITH,
     NODE_ASSERT,
     NODE_LAMBDA,

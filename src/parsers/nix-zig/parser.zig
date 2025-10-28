@@ -1229,36 +1229,91 @@ pub const Parser = struct {
 
     fn parseLetIn(self: *Parser) ParseError!*Node {
         const start = self.current_token.start;
-        const node = try self.makeNode(.NODE_LET_IN, start);
-        errdefer node.deinit();
 
         const let_tok = try self.expect(.TOKEN_LET);
-        try node.addChild(let_tok);
 
-        while (true) {
-            try self.consumeWs(node);
-            if (self.peek() == .TOKEN_IN or self.peek() == .TOKEN_EOF) break;
+        // Consume whitespace tokens to peek ahead
+        var ws_tokens = std.ArrayList(*Node){};
+        defer ws_tokens.deinit(self.allocator);
+        while (self.peek() == .TOKEN_WHITESPACE or self.peek() == .TOKEN_COMMENT) {
+            const ws = try self.consumeToken();
+            try ws_tokens.append(self.allocator, ws);
+        }
 
-            if (self.peek() == .TOKEN_INHERIT) {
-                const inherit_node = try self.parseInherit();
-                try node.addChild(inherit_node);
-            } else {
-                const binding = try self.parseAttrPathValue();
-                try node.addChild(binding);
+        // Check if this is legacy let syntax
+        const is_legacy = self.peek() == .TOKEN_L_BRACE;
+
+        if (is_legacy) {
+            // Parse as legacy let: let { bindings }
+            const node = try self.makeNode(.NODE_LEGACY_LET, start);
+            errdefer node.deinit();
+
+            try node.addChild(let_tok);
+            for (ws_tokens.items) |ws| {
+                try node.addChild(ws);
             }
+
+            const lbrace = try self.expect(.TOKEN_L_BRACE);
+            try node.addChild(lbrace);
+
+            while (true) {
+                try self.consumeWs(node);
+                if (self.peek() == .TOKEN_R_BRACE or self.peek() == .TOKEN_EOF) break;
+
+                if (self.peek() == .TOKEN_INHERIT) {
+                    const inherit_node = try self.parseInherit();
+                    try node.addChild(inherit_node);
+                } else {
+                    const binding = try self.parseAttrPathValue();
+                    try node.addChild(binding);
+                }
+            }
+
+            try self.consumeWs(node);
+            if (self.peek() == .TOKEN_R_BRACE) {
+                const rbrace = try self.consumeToken();
+                try node.addChild(rbrace);
+                finishNode(node, rbrace.end);
+            } else {
+                finishNode(node, self.current_token.start);
+            }
+
+            return node;
+        } else {
+            // Parse as normal let-in: let bindings in expr
+            const node = try self.makeNode(.NODE_LET_IN, start);
+            errdefer node.deinit();
+
+            try node.addChild(let_tok);
+            for (ws_tokens.items) |ws| {
+                try node.addChild(ws);
+            }
+
+            while (true) {
+                try self.consumeWs(node);
+                if (self.peek() == .TOKEN_IN or self.peek() == .TOKEN_EOF) break;
+
+                if (self.peek() == .TOKEN_INHERIT) {
+                    const inherit_node = try self.parseInherit();
+                    try node.addChild(inherit_node);
+                } else {
+                    const binding = try self.parseAttrPathValue();
+                    try node.addChild(binding);
+                }
+            }
+
+            if (self.peek() == .TOKEN_IN) {
+                const in_tok = try self.consumeToken();
+                try node.addChild(in_tok);
+            }
+            try self.consumeWs(node);
+
+            const body = try self.parseExpression(.LOWEST);
+            try node.addChild(body);
+
+            finishNode(node, body.end);
+            return node;
         }
-
-        if (self.peek() == .TOKEN_IN) {
-            const in_tok = try self.consumeToken();
-            try node.addChild(in_tok);
-        }
-        try self.consumeWs(node);
-
-        const body = try self.parseExpression(.LOWEST);
-        try node.addChild(body);
-
-        finishNode(node, body.end);
-        return node;
     }
 
     fn parseWith(self: *Parser) ParseError!*Node {
