@@ -495,6 +495,34 @@ pub const Parser = struct {
                 continue;
             }
 
+            // Check for function application (no whitespace)
+            const can_apply_direct = switch (self.peek()) {
+                .TOKEN_IDENT,
+                .TOKEN_OR,
+                .TOKEN_INTEGER,
+                .TOKEN_FLOAT,
+                .TOKEN_STRING_START,
+                .TOKEN_URI,
+                .TOKEN_PATH,
+                .TOKEN_L_BRACE,
+                .TOKEN_L_BRACK,
+                .TOKEN_L_PAREN,
+                .TOKEN_IF,
+                .TOKEN_LET,
+                .TOKEN_WITH,
+                .TOKEN_ASSERT,
+                .TOKEN_REC,
+                .TOKEN_SUB,
+                .TOKEN_INVERT,
+                => true,
+                else => false,
+            };
+
+            if (can_apply_direct and @intFromEnum(Precedence.CALL) > @intFromEnum(min_prec)) {
+                left = try self.parseFunctionApplication(left);
+                continue;
+            }
+
             // No more operators
             break;
         }
