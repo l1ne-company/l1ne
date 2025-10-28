@@ -195,7 +195,14 @@ pub const CST = struct {
             .token => {
                 const text = self.getText(node);
                 try writer.writeAll(" \"");
-                for (text) |ch| {
+
+                // Truncate content >= 25 bytes to show first 21 chars + " ..."
+                const threshold = 25;
+                const display_len = 21;
+                const truncated = text.len >= threshold;
+                const display_text = if (truncated) text[0..display_len] else text;
+
+                for (display_text) |ch| {
                     switch (ch) {
                         '\n' => try writer.writeAll("\\n"),
                         '\r' => try writer.writeAll("\\r"),
@@ -204,6 +211,10 @@ pub const CST = struct {
                         '"' => try writer.writeAll("\\\""),
                         else => try writer.writeByte(ch),
                     }
+                }
+
+                if (truncated) {
+                    try writer.writeAll(" ...");
                 }
                 try writer.writeAll("\"\n");
             },
