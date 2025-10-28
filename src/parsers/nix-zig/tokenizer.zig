@@ -214,6 +214,13 @@ pub const Tokenizer = struct {
             return .{ .kind = .TOKEN_COMMENT, .start = start, .end = self.pos };
         }
 
+        // Interpolation (works both in strings and outside for dynamic attributes)
+        if (self.startsWith("${")) {
+            self.advanceN(2);
+            try self.ctx_stack.append(self.allocator, .{ .interpol = .{ .brackets = 0 } });
+            return .{ .kind = .TOKEN_INTERPOL_START, .start = start, .end = self.pos };
+        }
+
         // String literals
         if (ch == '"') {
             self.advance();
