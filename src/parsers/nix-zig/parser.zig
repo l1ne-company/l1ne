@@ -144,7 +144,22 @@ pub const Parser = struct {
         const expr = try self.parseExpression(.LOWEST);
         try root.addChild(expr);
 
-        finishNode(root, expr.end);
+        // Consume trailing trivia, but NOT the final newline
+        while (self.peek() == .TOKEN_WHITESPACE or self.peek() == .TOKEN_COMMENT) {
+            // Stop before whitespace that extends to EOF (the final newline)
+            if (self.peek() == .TOKEN_WHITESPACE and self.current_token.end >= self.source.len) {
+                break;
+            }
+            const trivia = try self.consumeToken();
+            try root.addChild(trivia);
+        }
+
+        // Root ends at source.len, excluding trailing newline if present
+        const end_pos = if (self.source.len > 0 and self.source[self.source.len - 1] == '\n')
+            self.source.len - 1
+        else
+            self.source.len;
+        finishNode(root, end_pos);
         return CST.init(self.allocator, self.source, root);
     }
 
@@ -1343,20 +1358,14 @@ pub const Parser = struct {
         const attrpath = try self.parseAttrPath();
         try node.addChild(attrpath);
 
-        while (self.peek() == .TOKEN_WHITESPACE) {
-            const ws = try self.consumeToken();
-            try node.addChild(ws);
-        }
+        try self.consumeWs(node);
 
         if (self.peek() == .TOKEN_ASSIGN) {
             const assign = try self.consumeToken();
             try node.addChild(assign);
         }
 
-        while (self.peek() == .TOKEN_WHITESPACE) {
-            const ws = try self.consumeToken();
-            try node.addChild(ws);
-        }
+        try self.consumeWs(node);
 
         const value = try self.parseExpression(.LOWEST);
         try node.addChild(value);
