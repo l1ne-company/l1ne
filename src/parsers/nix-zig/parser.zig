@@ -448,6 +448,7 @@ pub const Parser = struct {
                 // Check for function application
                 const can_apply = switch (next_token) {
                     .TOKEN_IDENT,
+                    .TOKEN_OR,
                     .TOKEN_INTEGER,
                     .TOKEN_FLOAT,
                     .TOKEN_STRING_START,
@@ -508,7 +509,7 @@ pub const Parser = struct {
 
         return switch (self.peek()) {
             .TOKEN_INTEGER, .TOKEN_FLOAT, .TOKEN_URI, .TOKEN_PATH => try self.parseLiteral(),
-            .TOKEN_IDENT => try self.parseIdent(),
+            .TOKEN_IDENT, .TOKEN_OR => try self.parseIdent(),  // "or" can be used as identifier
             .TOKEN_STRING_START => try self.parseString(),
             .TOKEN_L_BRACE => blk: {
                 // Look ahead to distinguish pattern from attr set
@@ -610,7 +611,10 @@ pub const Parser = struct {
     fn parseIdent(self: *Parser) ParseError!*Node {
         const start = self.current_token.start;
         const node = try self.makeNode(.NODE_IDENT, start);
-        const tok = try self.consumeToken();
+        // TOKEN_OR can be used as identifier - convert to TOKEN_IDENT
+        const token_kind = if (self.current_token.kind == .TOKEN_OR) .TOKEN_IDENT else self.current_token.kind;
+        const tok = try self.makeToken(token_kind, self.current_token.start, self.current_token.end);
+        try self.advance();
         try node.addChild(tok);
         finishNode(node, tok.end);
         return node;
@@ -639,6 +643,9 @@ pub const Parser = struct {
 
                     const interp_start = try self.consumeToken();
                     try interp_node.addChild(interp_start);
+
+                    // Consume whitespace after ${
+                    try self.consumeWs(interp_node);
 
                     // Parse the expression inside
                     const expr = try self.parseExpression(.LOWEST);
@@ -762,7 +769,7 @@ pub const Parser = struct {
         var last_end: usize = dot.end;
 
         // Parse first attribute
-        if (self.peek() == .TOKEN_IDENT) {
+        if (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR) {
             const attr = try self.parseIdent();
             try attrpath.addChild(attr);
             last_end = attr.end;
@@ -782,7 +789,7 @@ pub const Parser = struct {
             try attrpath.addChild(next_dot);
             last_end = next_dot.end;
 
-            if (self.peek() == .TOKEN_IDENT) {
+            if (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR) {
                 const attr = try self.parseIdent();
                 try attrpath.addChild(attr);
                 last_end = attr.end;
@@ -843,7 +850,7 @@ pub const Parser = struct {
         errdefer attrpath.deinit();
 
         // Parse the attribute (identifier, string, or dynamic)
-        if (self.peek() == .TOKEN_IDENT) {
+        if (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR) {
             const attr = try self.parseIdent();
             try attrpath.addChild(attr);
             finishNode(attrpath, attr.end);
@@ -1318,8 +1325,8 @@ pub const Parser = struct {
         }
 
         // Parse inherited attributes (identifiers, strings, or dynamic)
-        while (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_INTERPOL_START) {
-            if (self.peek() == .TOKEN_IDENT) {
+        while (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR or self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_INTERPOL_START) {
+            if (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR) {
                 const ident = try self.parseIdent();
                 try node.addChild(ident);
             } else if (self.peek() == .TOKEN_STRING_START) {
@@ -1395,7 +1402,7 @@ pub const Parser = struct {
 
         // Parse attribute path components (a.b.c or "a"."b" or ${expr}.foo)
         while (true) {
-            if (self.peek() == .TOKEN_IDENT) {
+            if (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR) {
                 const ident = try self.parseIdent();
                 try node.addChild(ident);
                 finishNode(node, ident.end);
