@@ -771,6 +771,20 @@ pub const Parser = struct {
         try self.consumeWs(node);
 
         // Parse argument with CALL precedence to get left-associativity
+        //
+        // NOTE: Deprecated Nix behavior not supported (and intentionally so):
+        // Legacy Nix allowed expressions like "foo foldl or false" to parse as
+        // ((foo (foldl or)) false), with exactly ONE level of function application
+        // nesting in arguments. Our implementation uses strict left-associativity:
+        // (((foo foldl) or) false), which matches the future Nix behavior.
+        //
+        // Nix itself warns: "This expression uses `or` as an identifier in a way that
+        // will change in a future Nix release. Wrap this entire expression in parentheses
+        // to preserve its current meaning: (foldl or)"
+        // See: https://github.com/NixOS/nix/pull/11121
+        //
+        // This affects the or-as-ident test from rnix-parser, which tests the deprecated
+        // behavior. Our parser implements the correct future behavior instead.
         const arg = try self.parseExpression(.CALL);
         try node.addChild(arg);
 
@@ -1306,7 +1320,7 @@ pub const Parser = struct {
 
         const rec_tok = try self.expect(.TOKEN_REC);
         try node.addChild(rec_tok);
-        try self.skipWs();
+        try self.consumeWs(node);
 
         const lbrace = try self.expect(.TOKEN_L_BRACE);
         try node.addChild(lbrace);
