@@ -777,6 +777,23 @@ pub const Parser = struct {
             const attr = try self.parsePrefix();
             try attrpath.addChild(attr);
             last_end = attr.end;
+        } else if (self.peek() == .TOKEN_INTERPOL_START) {
+            // Dynamic attribute ${expr}
+            const dyn_node = try self.makeNode(.NODE_DYNAMIC, self.current_token.start);
+            errdefer dyn_node.deinit();
+
+            const interp_start = try self.expect(.TOKEN_INTERPOL_START);
+            try dyn_node.addChild(interp_start);
+
+            const expr = try self.parseExpression(.LOWEST);
+            try dyn_node.addChild(expr);
+
+            const interp_end = try self.expect(.TOKEN_INTERPOL_END);
+            try dyn_node.addChild(interp_end);
+
+            finishNode(dyn_node, interp_end.end);
+            try attrpath.addChild(dyn_node);
+            last_end = dyn_node.end;
         } else {
             attrpath.deinit();
             finishNode(node, dot.end);
@@ -797,6 +814,23 @@ pub const Parser = struct {
                 const attr = try self.parsePrefix();
                 try attrpath.addChild(attr);
                 last_end = attr.end;
+            } else if (self.peek() == .TOKEN_INTERPOL_START) {
+                // Dynamic attribute ${expr}
+                const dyn_node = try self.makeNode(.NODE_DYNAMIC, self.current_token.start);
+                errdefer dyn_node.deinit();
+
+                const interp_start = try self.expect(.TOKEN_INTERPOL_START);
+                try dyn_node.addChild(interp_start);
+
+                const expr = try self.parseExpression(.LOWEST);
+                try dyn_node.addChild(expr);
+
+                const interp_end = try self.expect(.TOKEN_INTERPOL_END);
+                try dyn_node.addChild(interp_end);
+
+                finishNode(dyn_node, interp_end.end);
+                try attrpath.addChild(dyn_node);
+                last_end = dyn_node.end;
             } else {
                 break;
             }
@@ -858,6 +892,23 @@ pub const Parser = struct {
             const attr = try self.parseString();
             try attrpath.addChild(attr);
             finishNode(attrpath, attr.end);
+        } else if (self.peek() == .TOKEN_INTERPOL_START) {
+            // Dynamic attribute ${expr}
+            const dyn_node = try self.makeNode(.NODE_DYNAMIC, self.current_token.start);
+            errdefer dyn_node.deinit();
+
+            const interp_start = try self.expect(.TOKEN_INTERPOL_START);
+            try dyn_node.addChild(interp_start);
+
+            const expr = try self.parseExpression(.LOWEST);
+            try dyn_node.addChild(expr);
+
+            const interp_end = try self.expect(.TOKEN_INTERPOL_END);
+            try dyn_node.addChild(interp_end);
+
+            finishNode(dyn_node, interp_end.end);
+            try attrpath.addChild(dyn_node);
+            finishNode(attrpath, dyn_node.end);
         } else {
             attrpath.deinit();
             finishNode(node, question.end);
