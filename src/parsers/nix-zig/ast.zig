@@ -134,7 +134,7 @@ pub const Node = struct {
             .kind = kind,
             .start = start,
             .end = end,
-            .children = std.ArrayList(*Node){},
+            .children = .{},
             .allocator = allocator,
         };
         return node;
