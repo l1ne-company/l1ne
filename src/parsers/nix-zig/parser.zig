@@ -150,10 +150,10 @@ pub const Parser = struct {
         // Consume trailing trivia, but NOT the final newline token
         while (self.peek() == .TOKEN_WHITESPACE or self.peek() == .TOKEN_COMMENT) {
             // Stop before whitespace that is just the final newline
-            // (whitespace tokens are now split at newline boundaries, so "\n" is separate)
+            // Since tokenizer splits trailing newlines, check for single trailing \n at EOF
             if (self.peek() == .TOKEN_WHITESPACE and
                 self.source.len > 0 and
-                self.current_token.start == self.source.len - 1 and
+                self.current_token.start >= self.source.len - 1 and
                 self.source[self.source.len - 1] == '\n') {
                 break;
             }
@@ -627,13 +627,54 @@ pub const Parser = struct {
 
     fn parseLiteral(self: *Parser) ParseError!*Node {
         const start = self.current_token.start;
-        // Paths get their own node type
-        const node_kind: NodeKind = if (self.peek() == .TOKEN_PATH) .NODE_PATH else .NODE_LITERAL;
-        const node = try self.makeNode(node_kind, start);
-        const tok = try self.consumeToken();
-        try node.addChild(tok);
-        finishNode(node, tok.end);
-        return node;
+
+        // Paths get their own node type and may have interpolation
+        if (self.peek() == .TOKEN_PATH) {
+            const node = try self.makeNode(.NODE_PATH, start);
+            errdefer node.deinit();
+
+            // Consume initial path token
+            const path_tok = try self.consumeToken();
+            try node.addChild(path_tok);
+
+            // Loop consuming path continuations and interpolations
+            while (self.peek() == .TOKEN_INTERPOL_START) {
+                // Parse interpolation: ${ expr }
+                const interp_node = try self.makeNode(.NODE_INTERPOL, self.current_token.start);
+                errdefer interp_node.deinit();
+
+                const interp_start = try self.consumeToken();
+                try interp_node.addChild(interp_start);
+
+                const expr = try self.parseExpression(.LOWEST);
+                try interp_node.addChild(expr);
+
+                const interp_end = try self.expect(.TOKEN_INTERPOL_END);
+                try interp_node.addChild(interp_end);
+
+                finishNode(interp_node, interp_end.end);
+                try node.addChild(interp_node);
+
+                // Check for path continuation after interpolation
+                if (self.peek() == .TOKEN_PATH) {
+                    const cont_tok = try self.consumeToken();
+                    try node.addChild(cont_tok);
+                } else {
+                    // No more path tokens
+                    break;
+                }
+            }
+
+            finishNode(node, node.children.items[node.children.items.len - 1].end);
+            return node;
+        } else {
+            // Other literals (integers, floats, URIs)
+            const node = try self.makeNode(.NODE_LITERAL, start);
+            const tok = try self.consumeToken();
+            try node.addChild(tok);
+            finishNode(node, tok.end);
+            return node;
+        }
     }
 
     fn parseIdent(self: *Parser) ParseError!*Node {
