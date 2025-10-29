@@ -113,6 +113,36 @@ This codebase follows a strict "no hacks" policy. Code must be:
 
 The user is a domain expert who can provide proper solutions.
 
+### TIGERSTYLE CODING PHILOSOPHY
+
+This codebase follows TigerBeetle's TigerStyle principles. See `docs/TIGER_STYLE.md` for the complete guide.
+
+**Key principles:**
+
+**Safety First:**
+- Use simple, explicit control flow - no recursion
+- Put limits on everything (loops, queues)
+- Assert all function arguments, return values, and invariants (minimum 2 assertions per function)
+- Assert both positive space (what you expect) AND negative space (what you don't expect)
+- Use explicitly-sized types (`u32`, not `usize`)
+- All memory statically allocated at startup
+- Functions limited to 70 lines max
+- Push `if`s up, push `for`s down - centralize control flow
+
+**Performance:**
+- Think performance from the outset, not after profiling
+- Optimize slowest resources first: network → disk → memory → CPU
+- Batch everything to amortize costs
+- Extract hot loops into standalone functions with primitive arguments
+
+**Developer Experience:**
+- Get nouns and verbs exactly right - names capture essence
+- Use `snake_case` for everything, no abbreviations
+- Always say WHY in comments and commit messages
+- Split compound conditions into nested `if/else` trees
+- State invariants positively
+- Zero dependencies policy
+
 ### Git Commits
 
 **NEVER add co-author attribution to commits.** Do not include:
