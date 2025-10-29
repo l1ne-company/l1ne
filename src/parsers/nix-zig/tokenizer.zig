@@ -13,6 +13,7 @@ const Context = union(enum) {
     string_end: void,
     interpol: struct { brackets: u32 },
     interpol_start: void,
+    path_body: void,
 };
 
 pub const Tokenizer = struct {
@@ -170,6 +171,38 @@ pub const Tokenizer = struct {
                     return .{ .kind = .TOKEN_ERROR, .start = start, .end = self.pos };
                 },
                 .interpol => {},
+                .path_body => {
+                    // After interpolation in a path, try to continue the path
+                    // Check if we can continue as a path
+                    if (self.current()) |ch| {
+                        if (!isWhitespace(ch) and ch != ';' and ch != ')' and ch != ']' and ch != '}' and ch != ':' and ch != ' ') {
+                            // Continue tokenizing as path
+                            const path_start = self.pos;
+                            while (self.current()) |c| {
+                                if (isWhitespace(c) or c == ';' or c == ')' or c == ']' or c == '}' or c == ':' or c == ' ') {
+                                    // End of path, pop context
+                                    _ = self.ctx_stack.pop();
+                                    break;
+                                }
+                                // Stop before next interpolation but keep path_body context
+                                if (self.startsWith("${")) {
+                                    break;
+                                }
+                                self.advance();
+                            }
+                            if (self.pos > path_start) {
+                                return .{ .kind = .TOKEN_PATH, .start = path_start, .end = self.pos };
+                            }
+                        } else {
+                            // Path has ended, pop context and continue with normal tokenization
+                            _ = self.ctx_stack.pop();
+                        }
+                    } else {
+                        // EOF, pop context
+                        _ = self.ctx_stack.pop();
+                    }
+                    // Fall through to normal tokenization
+                },
             }
             break;
         }
@@ -184,20 +217,30 @@ pub const Tokenizer = struct {
         // Whitespace - split at newline boundaries
         if (isWhitespace(ch)) {
             if (ch == '\n' or ch == '\r') {
-                // Consume all consecutive newlines, then following spaces/tabs (indentation)
-                while (self.current()) |c| {
-                    if (c == '\n' or c == '\r') {
-                        self.advance();
-                    } else {
-                        break;
+                // Consume first newline
+                self.advance();
+
+                // Only consume additional consecutive newlines if NOT followed by EOF
+                // This ensures trailing newlines at EOF are tokenized separately
+                if (self.current()) |_| {
+                    // Consume additional consecutive newlines
+                    while (self.current()) |c| {
+                        if (c == '\n' or c == '\r') {
+                            self.advance();
+                        } else {
+                            break;
+                        }
                     }
-                }
-                while (self.current()) |c| {
-                    if (c == ' ' or c == '\t') {
-                        self.advance();
-                    } else {
-                        break;
+                    // Then consume following spaces/tabs (indentation)
+                    while (self.current()) |c| {
+                        if (c == ' ' or c == '\t') {
+                            self.advance();
+                        } else {
+                            break;
+                        }
                     }
+                } else {
+                    // At EOF after first newline, stop here
                 }
             } else {
                 // Consume spaces/tabs until newline or non-whitespace
@@ -265,16 +308,16 @@ pub const Tokenizer = struct {
             return self.tokenizeNumber();
         }
 
-        // Identifiers and keywords
-        if (isIdentStart(ch)) {
-            return self.tokenizeIdentOrKeyword();
-        }
-
-        // Paths
-        if (ch == '/' or ch == '.' or ch == '~' or ch == '<') {
+        // Paths (check before identifiers to catch foo/bar patterns)
+        if (ch == '/' or ch == '.' or ch == '~' or ch == '<' or std.ascii.isAlphabetic(ch)) {
             if (self.maybeTokenizePath()) |tok| {
                 return tok;
             }
+        }
+
+        // Identifiers and keywords
+        if (isIdentStart(ch)) {
+            return self.tokenizeIdentOrKeyword();
         }
 
         // Operators and delimiters
@@ -422,14 +465,50 @@ pub const Tokenizer = struct {
                 return null;
             }
 
-            // Consume path
+            // Consume path, stopping at interpolation
             while (self.current()) |ch| {
                 if (isWhitespace(ch) or ch == ';' or ch == ')' or ch == ']' or ch == '}' or ch == ':') break;
+                // Stop before interpolation ${}
+                if (self.startsWith("${")) break;
                 self.advance();
             }
 
             // Check if we consumed anything meaningful
             if (self.pos > start + 1) {
+                // If we stopped at ${, push path_body context to continue after interpolation
+                if (self.startsWith("${")) {
+                    self.ctx_stack.append(self.allocator, .{ .path_body = {} }) catch {};
+                }
+                return .{ .kind = .TOKEN_PATH, .start = start, .end = self.pos };
+            }
+        }
+
+        // Check for paths without ./ or / prefix (like a/b or foo/${bar})
+        // These must contain a slash to be paths
+        if (std.ascii.isAlphabetic(self.current().?)) {
+            var has_slash = false;
+            while (self.current()) |ch| {
+                if (ch == '/') {
+                    has_slash = true;
+                    self.advance();
+                    // Continue consuming path after /
+                    while (self.current()) |c| {
+                        if (isWhitespace(c) or c == ';' or c == ')' or c == ']' or c == '}' or c == ':') break;
+                        // Stop before interpolation ${}
+                        if (self.startsWith("${")) break;
+                        self.advance();
+                    }
+                    break;
+                }
+                if (isWhitespace(ch) or ch == ';' or ch == ')' or ch == ']' or ch == '}' or ch == ':' or ch == '$') break;
+                self.advance();
+            }
+
+            if (has_slash and self.pos > start) {
+                // If we stopped at ${, push path_body context to continue after interpolation
+                if (self.startsWith("${")) {
+                    self.ctx_stack.append(self.allocator, .{ .path_body = {} }) catch {};
+                }
                 return .{ .kind = .TOKEN_PATH, .start = start, .end = self.pos };
             }
         }
