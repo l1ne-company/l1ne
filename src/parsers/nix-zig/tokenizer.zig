@@ -1,5 +1,6 @@
 const std = @import("std");
 const ast = @import("ast.zig");
+const charset = @import("charset.zig");
 const TokenKind = ast.TokenKind;
 
 pub const Token = struct {
@@ -92,11 +93,60 @@ pub const Tokenizer = struct {
         return ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r';
     }
 
+    /// SIMD-optimized consumeWhile for common character sets
     fn consumeWhile(self: *Tokenizer, comptime pred: fn (u8) bool) void {
+        // SIMD-optimized paths for known predicates
+        if (pred == std.ascii.isDigit) {
+            self.consumeWhileCharSet(charset.DigitSet);
+            return;
+        }
+        if (pred == isIdentCont) {
+            self.consumeWhileCharSet(charset.IdentContSet);
+            return;
+        }
+        if (pred == isWhitespace) {
+            self.consumeWhileCharSet(charset.WhitespaceSet);
+            return;
+        }
+
+        // Scalar-only path for other predicates
         while (self.current()) |ch| {
             if (!pred(ch)) break;
             self.advance();
         }
+    }
+
+    /// SIMD-optimized character set consumer (inline implementation)
+    fn consumeWhileCharSet(self: *Tokenizer, comptime CharSet: type) void {
+        const remaining = self.source[self.pos..];
+        var consumed: usize = 0;
+
+        // Try SIMD if available and enough data
+        const vector_len = std.simd.suggestVectorLength(u8) orelse 0;
+        if (vector_len > 0 and remaining.len >= vector_len) {
+            const Vec = @Vector(vector_len, u8);
+            while (consumed + vector_len <= remaining.len) {
+                const chunk: Vec = remaining[consumed..][0..vector_len].*;
+                const matches = CharSet.matchVector(chunk);
+
+                if (@reduce(.And, matches)) {
+                    consumed += vector_len;
+                    continue;
+                }
+
+                // Find first non-match
+                consumed += std.simd.firstTrue(!matches).?;
+                self.pos += consumed;
+                return;
+            }
+        }
+
+        // Scalar fallback for remaining bytes
+        while (consumed < remaining.len) {
+            if (!CharSet.match(remaining[consumed])) break;
+            consumed += 1;
+        }
+        self.pos += consumed;
     }
 
     // Tokenize string content
