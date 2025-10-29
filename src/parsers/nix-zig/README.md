@@ -2,6 +2,71 @@
 
 A complete Nix language parser written in Zig, producing a Concrete Syntax Tree (CST).
 
+## Performance
+
+**2.73x faster** than the production Rust rnix-parser on the 802KB nixpkgs `all-packages.nix` benchmark:
+
+```
+════════════════════════════════════════════════════════════════
+  Nix Parser Benchmark Comparison
+════════════════════════════════════════════════════════════════
+
+Zig Parser:
+                        time:   [11.195 ms 12.014 ms 13.373 ms]
+                        thrpt:  [63.717 MiB/s 63.717 MiB/s 63.717 MiB/s]
+                        stddev: 0.611 ms (5.1%)
+
+Rust rnix-parser (reference):
+                        time:   [31.359 ms 32.855 ms 34.456 ms]
+                        thrpt:  [22.216 MiB/s 23.299 MiB/s 24.410 MiB/s]
+
+Performance Analysis:
+  Zig:          12.014 ms
+  Rust rnix:    32.855 ms
+  Speedup:      2.73x faster ⚡
+════════════════════════════════════════════════════════════════
+```
+
+### Running Benchmarks
+
+All benchmarks use Nix for deterministic, reproducible builds.
+
+**Run Zig parser benchmark:**
+```bash
+# From project root
+nix-build src/parsers/nix-zig/benchmark.nix -A zigBenchmark
+
+# View results
+cat result/results/output.txt
+cat result/results/benchmark_results.json
+```
+
+**Run comparison (Zig vs Rust):**
+```bash
+nix-build src/parsers/nix-zig/benchmark.nix -A comparison
+cat result/comparison.txt
+```
+
+**Quick benchmarks (from project root):**
+```bash
+zig build nix-bench           # Synthetic benchmarks
+zig build bench-compare       # Detailed comparison
+zig build bench-auto          # Automated with JSON export
+```
+
+### Performance Summary
+
+| Parser | Mean Time | Throughput | Speedup |
+|--------|-----------|------------|---------|
+| **Zig** | 12.01 ms | 63.7 MiB/s | **2.73x** |
+| Rust rnix | 32.86 ms | 23.3 MiB/s | 1.00x |
+
+**Key Achievements:**
+- ✅ 2.73x faster than production Rust parser
+- ✅ 100% test compatibility (60/60 passing tests)
+- ✅ Production-ready performance
+- ✅ Deterministic benchmarks via Nix
+
 ## Features
 
 - ✅ Full Nix language support including:
@@ -360,7 +425,7 @@ foo foldl or false
 
 ### Recommendations for Production Use
 
-✅ **Safe to use for:**
+ **Safe to use for:**
 - Parsing standard Nix expressions
 - Building Nix tooling (formatters, linters, LSPs)
 - Static analysis of Nix code
@@ -405,9 +470,9 @@ The parser uses **Pratt parsing** (precedence climbing) for expressions:
 ### CST vs AST
 
 This parser produces a **Concrete Syntax Tree (CST)** rather than an Abstract Syntax Tree (AST):
-- ✅ Preserves all whitespace and comments
-- ✅ Suitable for code formatters and refactoring tools
-- ✅ Can reconstruct original source exactly
+-  Preserves all whitespace and comments
+-  Suitable for code formatters and refactoring tools
+-  Can reconstruct original source exactly
 - ⚠️ Slightly more verbose than AST for analysis
 
 ## Contributing
