@@ -154,4 +154,19 @@ pub fn build(b: *std.Build) void {
     const ccl_example_step = b.step("ccl-example", "Run CCL example");
     const ccl_example_run = b.addRunArtifact(ccl_example);
     ccl_example_step.dependOn(&ccl_example_run.step);
+
+    // L1NE unit tests
+    const l1ne_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/l1ne/test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    l1ne_tests.root_module.addImport("nix", nix_module);
+    l1ne_tests.root_module.addImport("ccl", ccl_module);
+
+    const test_step = b.step("test", "Run L1NE unit tests");
+    const run_tests = b.addRunArtifact(l1ne_tests);
+    test_step.dependOn(&run_tests.step);
 }
