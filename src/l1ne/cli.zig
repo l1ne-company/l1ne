@@ -70,7 +70,10 @@ fn validate_percentage(value: u8, flag: []const u8) u8 {
 
 const CLIArgs = union(enum) {
     const Start = struct {
-        // Required: service configuration
+        // Configuration loading: either from Nix file OR from CLI flags
+        config: ?[]const u8 = null, // Path to Nix configuration file
+
+        // Required when not using --config: service configuration
         service: []const u8,
 
         // Binary path and arguments to execute
@@ -145,87 +148,35 @@ const CLIArgs = union(enum) {
         path: []const u8, // Path to WAL storage
     };
 
+    const Simulate = struct {
+        config: []const u8, // Path to scenario Nix file
+        seed: ?u64 = null, // Optional seed override
+        output: []const u8 = "text", // Output format: text or json
+    };
+
     start: Start,
     status: Status,
     wal: WAL,
+    simulate: Simulate,
     version: Version,
     benchmark: Benchmark,
 
     pub const help =
-        \\L1NE
+        \\l1ne - Service orchestrator
         \\
         \\Usage:
-        \\  l1ne [-h | --help]
-        \\  l1ne start --service=<name> --exec=<binary> --nodes=<addr:port,...> <path> [options]
-        \\  l1ne status [--node=<addr:port>]
-        \\  l1ne wal <path> [--node=<addr:port>] [--slot=N] [--lines=N] [--follow]
-        \\  l1ne version [--verbose]
-        \\  l1ne benchmark [options]
-        \\
-        \\Commands:
-        \\
-        \\  start      Deploy service instances to specified network addresses
-        \\  status     Show status of service instances (limited implementation)
-        \\  wal        View centralized Write-Ahead Log from instances
-        \\  version    Print the L1NE version
-        \\  benchmark  Run performance benchmarks
+        \\  l1ne start [--config=FILE] DIR
+        \\  l1ne simulate --config=FILE [--seed=N] [--output=FORMAT]
+        \\  l1ne wal FILE [--lines=N] [--follow]
+        \\  l1ne version
         \\
         \\Examples:
-        \\  l1ne start --service=dumb-server --exec=./dumb-server/result/bin/dumb-server --nodes=8080,8081 /tmp/state
-        \\    Deploy 2 dumb-server instances on ports 8080 and 8081
-        \\
-        \\  l1ne status --node=127.0.0.1:8080
-        \\    Show status of a specific node
-        \\
-        \\  l1ne wal /tmp/state --lines=100 --follow
-        \\    Tail the last 100 lines of the WAL and follow for new entries
-        \\
-        \\  l1ne benchmark --target=http://localhost:8080 --duration=60
-        \\    Run a benchmark for 60 seconds against the target
-        \\
-        \\Start Options:
-        \\
-        \\  --service=<name>       Required. Name of the service to deploy
-        \\  --exec=<binary>        Required. Path to the binary to execute
-        \\  --nodes=<addresses>    Required. Comma-separated list of IP:port pairs
-        \\  --address=<bind>       Bind address for control plane (default: 0.0.0.0)
-        \\  --mem-percent=<1-100>  Memory limit as percentage of FAAS limit (default: 50)
-        \\  --cpu-percent=<1-100>  CPU limit as percentage of FAAS limit (default: 50)
-        \\  --cache-size=<size>    Cache size (e.g., 100MiB, 1GiB)
-        \\  --development          Enable development mode
-        \\  --log-debug            Enable debug logging
-        \\  --experimental         Enable experimental features
-        \\  --sre                  Enable SRE mode
-        \\
-        \\Status Options:
-        \\
-        \\  --node=<address>       Specific node address to query
-        \\
-        \\WAL Options:
-        \\
-        \\  --node=<address>       Filter by specific node
-        \\  --slot=<number>        Specific log entry slot
-        \\  --lines=<number>       Number of lines to display (default: 100)
-        \\  --follow, -f           Continuously monitor for new entries
-        \\
-        \\Version Options:
-        \\
-        \\  --verbose              Print detailed version information
-        \\
-        \\Benchmark Options:
-        \\
-        \\  --target=<url>         Target URL for benchmark
-        \\  --duration=<seconds>   Duration in seconds (default: 60)
-        \\  --connections=<N>      Number of concurrent connections (default: 100)
-        \\  --addresses=<addrs>    Comma-separated addresses
-        \\  --seed=<value>         Random seed for reproducible tests
-        \\  --validate             Enable validation mode
-        \\  --logger-debugger      Enable logger debugger
-        \\  --log-debug            Enable debug logging
-        \\
-        \\General Options:
-        \\
-        \\  -h, --help             Print this help message and exit
+        \\  l1ne start .
+        \\  l1ne start --config=my-services.nix .
+        \\  l1ne simulate --config=scenarios/chaos-test.nix
+        \\  l1ne simulate --config=scenarios/load-test.nix --seed=12345
+        \\  l1ne wal l1ne.wal --lines=50
+        \\  l1ne wal l1ne.wal --follow
         \\
     ;
 };
@@ -252,6 +203,7 @@ pub const Command = union(enum) {
     const Path = BoundedArray(u8, std.fs.max_path_bytes);
 
     pub const Start = struct {
+        config_path: ?[]const u8, // Path to Nix configuration file (optional)
         service: []const u8, // Service name to deploy
         exec_path: []const u8, // Binary path to execute
         nodes: Addresses, // Nodes to deploy to (one service per node)
@@ -293,9 +245,16 @@ pub const Command = union(enum) {
         log_debug: bool,
     };
 
+    pub const Simulate = struct {
+        config_path: []const u8, // Path to scenario Nix file
+        seed: ?u64, // Optional seed override
+        output: []const u8, // Output format: "text" or "json"
+    };
+
     start: Start,
     status: Status,
     wal: WAL,
+    simulate: Simulate,
     version: Version,
     benchmark: Benchmark,
 };
@@ -347,6 +306,7 @@ pub fn parse_args(allocator: std.mem.Allocator) Command {
         .start => |start| .{ .start = parse_args_start(start) },
         .status => |status| .{ .status = parse_args_status(status) },
         .wal => |wal| .{ .wal = parse_args_wal(wal) },
+        .simulate => |simulate| .{ .simulate = parse_args_simulate(simulate) },
         .version => |version| .{ .version = parse_args_version(version) },
         .benchmark => |benchmark| .{ .benchmark = parse_args_benchmark(benchmark) },
     };
@@ -372,6 +332,8 @@ fn parse_cli_args(args_iterator: anytype, allocator: std.mem.Allocator) CLIArgs 
         return .{ .status = parse_status_args(args_iterator) };
     } else if (std.mem.eql(u8, command_str, "wal")) {
         return .{ .wal = parse_wal_args(args_iterator) };
+    } else if (std.mem.eql(u8, command_str, "simulate")) {
+        return .{ .simulate = parse_simulate_args(args_iterator) };
     } else if (std.mem.eql(u8, command_str, "version")) {
         return .{ .version = parse_version_args(args_iterator) };
     } else if (std.mem.eql(u8, command_str, "benchmark")) {
@@ -387,6 +349,20 @@ fn parse_status_args(args_iterator: anytype) CLIArgs.Status {
     while (args_iterator.next()) |arg| {
         if (parser.parseFlag(arg, "--node=", "node")) continue;
         // Additional status-specific flags can be added here
+    }
+
+    return parser.result;
+}
+
+fn parse_simulate_args(args_iterator: anytype) CLIArgs.Simulate {
+    var parser = GenericArgParser(CLIArgs.Simulate).init();
+
+    while (args_iterator.next()) |arg| {
+        if (parser.parseFlag(arg, "--config=", "config")) continue;
+        if (parser.parseFlag(arg, "--seed=", "seed")) continue;
+        if (parser.parseFlag(arg, "--output=", "output")) continue;
+
+        fatal("Unknown argument for simulate command: {s}", .{arg});
     }
 
     return parser.result;
@@ -486,6 +462,7 @@ fn parse_start_args(args_iterator: anytype) CLIArgs.Start {
 
     while (args_iterator.next()) |arg| {
         // Use comptime-generated parsing for common patterns
+        if (parser.parseFlag(arg, "--config=", "config")) continue;
         if (parser.parseFlag(arg, "--service=", "service")) continue;
         if (parser.parseFlag(arg, "--exec=", "exec")) continue;
         if (parser.parseFlag(arg, "--cache-size=", "cache_size")) continue;
@@ -546,15 +523,44 @@ fn parse_start_args(args_iterator: anytype) CLIArgs.Start {
         }
     }
 
-    if (parser.result.service.len == 0) {
-        fatal("--service is required", .{});
+    // Validate: either --config OR (--service + --exec + --pid-addresses)
+    const has_config = parser.result.config != null;
+    const has_cli_config = parser.result.service.len > 0 or
+        parser.result.exec.len > 0 or
+        parser.result.pid_addresses.len > 0;
+
+    if (!has_config and !has_cli_config) {
+        fatal("Either --config or (--service + --exec + --pid-addresses) is required", .{});
     }
-    if (parser.result.exec.len == 0) {
-        fatal("--exec is required", .{});
+
+    if (has_config and has_cli_config) {
+        fatal("Cannot use both --config and CLI flags (--service, --exec, --pid-addresses)", .{});
     }
-    if (parser.result.pid_addresses.len == 0) {
-        fatal("--nodes (or --pid-addresses) is required", .{});
+
+    // When using CLI flags, all are required
+    if (!has_config) {
+        if (parser.result.service.len == 0) {
+            fatal("--service is required when not using --config", .{});
+        }
+        if (parser.result.exec.len == 0) {
+            fatal("--exec is required when not using --config", .{});
+        }
+        if (parser.result.pid_addresses.len == 0) {
+            fatal("--nodes (or --pid-addresses) is required when not using --config", .{});
+        }
     }
+
+    // When using --config, validate the path
+    if (has_config) {
+        const config_path = parser.result.config.?;
+        if (config_path.len == 0) {
+            fatal("--config path cannot be empty", .{});
+        }
+        if (!std.mem.endsWith(u8, config_path, ".nix")) {
+            fatal("--config must point to a .nix file", .{});
+        }
+    }
+
     if (parser.result.positional.path.len == 0) {
         fatal("Missing required data file path", .{});
     }
@@ -614,6 +620,30 @@ fn parse_args_wal(wal: CLIArgs.WAL) Command.WAL {
     };
 }
 
+fn parse_args_simulate(simulate: CLIArgs.Simulate) Command.Simulate {
+    // Validate required arguments
+    if (simulate.config.len == 0) {
+        fatal("simulate command requires --config=FILE argument", .{});
+    }
+
+    if (!std.mem.endsWith(u8, simulate.config, ".nix")) {
+        fatal("config file must have .nix extension: {s}", .{simulate.config});
+    }
+
+    // Validate output format
+    const valid_output = std.mem.eql(u8, simulate.output, "text") or
+        std.mem.eql(u8, simulate.output, "json");
+    if (!valid_output) {
+        fatal("--output must be 'text' or 'json', got: {s}", .{simulate.output});
+    }
+
+    return .{
+        .config_path = simulate.config,
+        .seed = simulate.seed,
+        .output = simulate.output,
+    };
+}
+
 // Validate experimental flags using comptime
 fn validateExperimentalFlags(start: CLIArgs.Start) void {
     const stable_args = .{
@@ -657,7 +687,12 @@ fn validateExperimentalFlags(start: CLIArgs.Start) void {
 fn parse_args_start(start: CLIArgs.Start) Command.Start {
     validateExperimentalFlags(start);
 
-    const addresses = parse_addresses(start.pid_addresses, "--pid-addresses");
+    // When using --config, provide dummy values for required CLI fields
+    // main.zig will ignore these and use config from file
+    const addresses = if (start.config != null)
+        Command.Addresses.init()
+    else
+        parse_addresses(start.pid_addresses, "--pid-addresses");
 
     // Use generic validators for limits
     const storage_limit = validate_range(
@@ -702,6 +737,7 @@ fn parse_args_start(start: CLIArgs.Start) Command.Start {
         parse_address_and_port("0.0.0.0", "--address", orchestrator_port);
 
     return .{
+        .config_path = start.config,
         .service = start.service,
         .exec_path = start.exec,
         .nodes = addresses,
