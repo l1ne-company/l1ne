@@ -1,0 +1,7 @@
+[scope] Short imperative summary (English only, <=72 chars)
+
+Longer description (motivation, context, what changed). English only.
+
+BREAKING CHANGE: describe what breaks and how to migrate (if applicable)
+
+Refs: #issue-id (if applicable)
