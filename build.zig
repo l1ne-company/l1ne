@@ -53,10 +53,8 @@ fn addNixParserTargets(
     });
     nix_test.root_module.addImport("nix", module);
 
-    const nix_test_step = b.step("nix-test", "Run Nix parser test");
     const nix_test_run = b.addRunArtifact(nix_test);
     if (b.args) |args| nix_test_run.addArgs(args);
-    nix_test_step.dependOn(&nix_test_run.step);
 
     const nix_test_runner = b.addExecutable(.{
         .name = "nix-test-runner",
@@ -114,6 +112,13 @@ fn addNixParserTargets(
     const bench_auto_run = b.addRunArtifact(nix_bench_auto);
     nix_bench_auto_step.dependOn(&bench_auto_run.step);
 
+    const nix_suite = b.step("nix-zig", "Run Nix parser suite");
+    nix_suite.dependOn(&nix_test_run.step);
+    nix_suite.dependOn(&test_runner_run.step);
+    nix_suite.dependOn(&bench_run.step);
+    nix_suite.dependOn(&bench_compare_run.step);
+    nix_suite.dependOn(&bench_auto_run.step);
+
     return .{ .module = module };
 }
 
@@ -141,6 +146,20 @@ fn addCclParserTargets(
     const ccl_example_step = b.step("ccl-example", "Run CCL example");
     const ccl_example_run = b.addRunArtifact(ccl_example);
     ccl_example_step.dependOn(&ccl_example_run.step);
+
+    const ccl_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/parsers/ccl-zig/root.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    ccl_tests.root_module.addImport("ccl", module);
+    const ccl_tests_run = b.addRunArtifact(ccl_tests);
+
+    const ccl_suite = b.step("ccl-zig", "Run CCL parser suite");
+    ccl_suite.dependOn(&ccl_tests_run.step);
+    ccl_suite.dependOn(&ccl_example_run.step);
 
     return .{ .module = module };
 }
