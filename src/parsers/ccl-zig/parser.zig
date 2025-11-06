@@ -1,3 +1,7 @@
+//! CCL parser with inline tests. Run `zig test src/parsers/ccl-zig/parser.zig`
+//! or `zig test src/parsers/ccl-zig/root.zig` from the monorepo root to execute
+//! them in isolation.
+
 const std = @import("std");
 const root = @import("root.zig");
 const Config = root.Config;

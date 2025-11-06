@@ -1,4 +1,6 @@
-// Test data derived from rnix-parser:
+//! Nix parser integration test harness.
+//! Run via `zig build nix-test` from the monorepo root.
+//! Test data derived from rnix-parser:
 // MIT License - Copyright (c) 2018 jD91mZM2
 // https://github.com/nix-community/rnix-parser
 //
