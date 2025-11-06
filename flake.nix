@@ -2,11 +2,13 @@
   description = "setup-dev-zig-0-15-1";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-24.05";
+  inputs.one-for-all.url = "github:l1ne-company/one-for-all";
 
-  outputs = { self, nixpkgs }: 
+  outputs = { self, nixpkgs, one-for-all }: 
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
+      oneForAllLib = one-for-all.lib.mkLib pkgs;
 
       zigFromTarball = pkgs.stdenv.mkDerivation {
         pname = "zig";
@@ -29,10 +31,25 @@
         '';
       };
     in {
+      lib = {
+        inherit oneForAllLib;
+      };
+
       packages.${system}.default = zigFromTarball;
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = [ zigFromTarball ];
+        packages = [
+          zigFromTarball
+        ];
+
+        shellHook = ''
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            echo "syncing one-for-all submodule to latest remote commit..."
+            git submodule update --init --recursive --remote libs/one-for-all || {
+              echo "warning: failed to refresh submodule; continuing with existing checkout"
+            }
+          fi
+        '';
       };
     };
 }

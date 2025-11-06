@@ -16,9 +16,25 @@
         "type": "github"
       }
     },
+    "one-for-all": {
+      "locked": {
+        "lastModified": 1762353787,
+        "narHash": "sha256-Pcebytd+V15yfxXfmANKKm17xHDn92FMPZyArJ5Vj2A=",
+        "owner": "l1ne-company",
+        "repo": "one-for-all",
+        "rev": "c646297f6d4232e6104e78b97c3dabef514d3a2b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "l1ne-company",
+        "repo": "one-for-all",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": "nixpkgs",
+        "one-for-all": "one-for-all"
       }
     }
   },
