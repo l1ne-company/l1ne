@@ -1,176 +1,61 @@
-# Microservices Configuration for L1NE
-#
-# Example showing multiple services with shared configuration.
-#
-# Deploy with: l1ne start --config=microservices.nix .
-
-{ pkgs ? import <nixpkgs> {} }:
+# Compose multiple roles from the same dumb-server container blueprint.
+# This mirrors docker-compose: shared image, different instance settings.
 
 let
-  l1ne = import ./lib.nix { inherit pkgs; };
+  mkDumbServer = {
+    root ? ../../src/l1ne/simulator/dumb-server
+  }:
+  { name, port, memory_mb ? 50, cpu_percent ? 10 }:
+    {
+      inherit name port memory_mb cpu_percent;
+      exec = "${root}/result/bin/dumb-server";
+    };
 
-  # Import shared configuration (like Kubernetes ConfigMaps)
-  commonConfig = {
-    env = {
-      ENVIRONMENT = "production";
-      REGION = "us-east-1";
-      LOG_FORMAT = "json";
-    };
-    resources = {
-      memory_percent = 75;
-      cpu_percent = 70;
-    };
+  container = mkDumbServer {};
+
+  auth = container {
+    name = "auth-service";
+    port = 8001;
+    memory_mb = 72;
+    cpu_percent = 25;
   };
 
-  # Shared labels (like Kubernetes labels for service discovery)
-  labels = {
-    team = "platform";
-    version = "v1.2.3";
-    managed_by = "l1ne";
+  user = container {
+    name = "user-service";
+    port = 8002;
+    memory_mb = 64;
+    cpu_percent = 20;
   };
 
-  # Microservices that compose the application
-  microservices = [
-    (l1ne.mkService {
-      name = "auth-service";
-      package = pkgs.hello;
-      port = 8001;
+  orders = container {
+    name = "order-service";
+    port = 8003;
+    memory_mb = 96;
+    cpu_percent = 30;
+  };
 
-      # Auth: critical service, keep multiple instances
-      instances = {
-        min = 3;
-        max = 12;
-        start = 4;
-      };
-
-      env = commonConfig.env // {
-        SERVICE_NAME = "auth";
-        JWT_SECRET_FILE = "/run/secrets/jwt";
-      };
-      resources = commonConfig.resources;
-      health_check = l1ne.mkHttpHealthCheck {
-        path = "/health";
-      };
-    } // { inherit labels; })
-
-    (l1ne.mkService {
-      name = "user-service";
-      package = pkgs.hello;
-      port = 8002;
-
-      # User: moderate scaling
-      instances = {
-        min = 2;
-        max = 8;
-        start = 3;
-      };
-
-      env = commonConfig.env // {
-        SERVICE_NAME = "user";
-        AUTH_URL = "http://auth-service:8001";
-      };
-      resources = commonConfig.resources;
-      health_check = l1ne.mkHttpHealthCheck {
-        path = "/health";
-      };
-    } // { inherit labels; })
-
-    (l1ne.mkService {
-      name = "order-service";
-      package = pkgs.hello;
-      port = 8003;
-
-      # Order: high scaling for peak traffic
-      instances = {
-        min = 4;
-        max = 20;
-        start = 6;
-      };
-
-      env = commonConfig.env // {
-        SERVICE_NAME = "order";
-        USER_URL = "http://user-service:8002";
-      };
-      resources = commonConfig.resources;
-      health_check = l1ne.mkHttpHealthCheck {
-        path = "/health";
-      };
-    } // { inherit labels; })
-
-    (l1ne.mkService {
-      name = "payment-service";
-      package = pkgs.hello;
-      port = 8004;
-
-      # Payment: critical, limited scaling (stateful)
-      instances = {
-        min = 2;
-        max = 6;
-        start = 3;
-      };
-
-      env = commonConfig.env // {
-        SERVICE_NAME = "payment";
-        STRIPE_API_KEY_FILE = "/run/secrets/stripe";
-      };
-      resources = {
-        memory_percent = 80;  # Higher for payment processing
-        cpu_percent = 75;
-      };
-      health_check = l1ne.mkHttpHealthCheck {
-        path = "/health";
-        unhealthy_threshold = 2;  # Stricter for payments
-      };
-    } // { inherit labels; })
-  ];
-
-  # API Gateway (entry point)
-  gateway = l1ne.mkService {
+  gateway = container {
     name = "api-gateway";
-    package = pkgs.nginx;
-    port = 443;
-
-    # Gateway: high availability with load balancing
-    instances = {
-      min = 2;   # Always keep 2 for HA
-      max = 10;  # Scale for traffic spikes
-      start = 3;
-    };
-
-    env = {
-      BACKEND_SERVICES = "auth,user,order,payment";
-      SSL_CERT_FILE = "/run/secrets/ssl-cert";
-    };
-    resources = {
-      memory_percent = 60;
-      cpu_percent = 80;
-    };
-    health_check = l1ne.mkHttpHealthCheck {
-      path = "/";
-      port = 8080;  # Health check on different port
-    };
-  } // {
-    labels = labels // { role = "gateway"; };
+    port = 8080;
+    memory_mb = 80;
+    cpu_percent = 35;
   };
-
 in
-# Declarative application manifest (like k8s Deployment)
-l1ne.mkMesh {
-  name = "microservices-platform";
-
-  # All services in the mesh
-  services = [ gateway ] ++ microservices;
-
-  # Platform-wide resource limits
-  limits = {
-    service_instances_count = 8;     # Max 8 services
-    proxy_connections_max = 1024;    # Max 1024 concurrent connections
-    proxy_buffer_size_kb = 64;       # 64 KiB buffers
-    cgroup_monitors_count = 8;       # Monitor all services
-    systemd_buffer_size_kb = 16;     # 16 KiB systemd buffer
+{
+  runtime = {
+    proxy_connections_max = 512;
+    proxy_buffer_size_kb = 8;
+    cgroup_monitors_max = 8;
+    systemd_buffer_size_kb = 8;
   };
 
-  # Write-Ahead Log for deterministic replay and debugging
-  wal_enabled = true;
-  wal_path = "/var/lib/l1ne/platform.wal";
+  services = {
+    max_instances = 8;
+    instances = [
+      auth
+      user
+      orders
+      gateway
+    ];
+  };
 }
