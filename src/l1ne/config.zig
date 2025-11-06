@@ -69,6 +69,20 @@ pub const Config = struct {
         assert(path.len < std.fs.max_path_bytes); // Path must be reasonable
         assert(std.mem.endsWith(u8, path, ".nix")); // Must be .nix file
 
+        // Resolve to absolute path so relative exec paths can be normalized later
+        const absolute_path = std.fs.cwd().realpathAlloc(allocator, path) catch |err| switch (err) {
+            error.FileNotFound => {
+                std.log.err("Config file not found: {s}", .{path});
+                return error.ConfigNotFound;
+            },
+            error.AccessDenied => {
+                std.log.err("Config file not accessible: {s}", .{path});
+                return error.ConfigNotAccessible;
+            },
+            else => return err,
+        };
+        defer allocator.free(absolute_path);
+
         // Read entire file into memory
         const source = std.fs.cwd().readFileAlloc(
             allocator,
@@ -108,7 +122,13 @@ pub const Config = struct {
         assert(@intFromPtr(cst.root) != 0); // CST must have valid root
 
         // Extract configuration from CST
-        return try extract_config(allocator, cst, source);
+        var config = try extract_config(allocator, cst, source);
+        errdefer config.deinit();
+
+        const base_dir = std.fs.path.dirname(absolute_path) orelse absolute_path;
+        try config.absolutize_exec_paths(base_dir);
+
+        return config;
     }
 
     /// Load configuration from Nix source string
@@ -131,6 +151,34 @@ pub const Config = struct {
 
         // Extract configuration from CST
         return try extract_config(allocator, cst, source);
+    }
+
+    /// Convert relative service exec paths to absolute paths
+    ///
+    /// Invariants:
+    ///   - Pre: self is valid pointer
+    ///   - Pre: base_dir is absolute and non-empty
+    ///   - Post: all service.exec_path values are absolute
+    pub fn absolutize_exec_paths(self: *Config, base_dir: []const u8) !void {
+        assert(@intFromPtr(self) != 0); // Self must be valid
+        assert(base_dir.len > 0); // Base directory must be non-empty
+        assert(std.fs.path.isAbsolute(base_dir)); // Base directory must be absolute
+
+        for (self.services) |*service| {
+            assert(service.exec_path.len > 0); // Exec path must be non-empty
+
+            if (std.fs.path.isAbsolute(service.exec_path)) continue;
+
+            const old_path = service.exec_path;
+            const absolute_exec = try std.fs.path.resolve(
+                self.allocator,
+                &[_][]const u8{ base_dir, old_path },
+            );
+            errdefer self.allocator.free(absolute_exec);
+
+            self.allocator.free(old_path);
+            service.exec_path = absolute_exec;
+        }
     }
 
     /// Free all allocated memory for this configuration

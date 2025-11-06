@@ -319,6 +319,50 @@ test "Config: parse realistic production config" {
     try testing.expectEqualStrings("demo-2", cfg.services[1].name);
 }
 
+test "Config: from_nix_file resolves relative exec paths to absolute" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const config_source =
+        \\{
+        \\  runtime = {
+        \\    proxy_connections_max = 4;
+        \\  };
+        \\  services = {
+        \\    instances = [
+        \\      {
+        \\        name = "demo";
+        \\        exec = "./bin/demo-service";
+        \\      }
+        \\    ];
+        \\  };
+        \\}
+    ;
+
+    try tmp.dir.writeFile(.{
+        .sub_path = "config.nix",
+        .data = config_source,
+    });
+
+    const config_path = try tmp.dir.realpathAlloc(testing.allocator, "config.nix");
+    defer testing.allocator.free(config_path);
+
+    var cfg = try Config.from_nix_file(testing.allocator, config_path);
+    defer cfg.deinit();
+
+    try testing.expect(@as(usize, 1) == cfg.services.len);
+    try testing.expect(std.fs.path.isAbsolute(cfg.services[0].exec_path));
+
+    const base_dir = std.fs.path.dirname(config_path) orelse config_path;
+    const expected_exec = try std.fs.path.resolve(
+        testing.allocator,
+        &[_][]const u8{ base_dir, "bin/demo-service" },
+    );
+    defer testing.allocator.free(expected_exec);
+
+    try testing.expectEqualStrings(expected_exec, cfg.services[0].exec_path);
+}
+
 // Test: Parse config with standard whitespace
 
 // Verifies:

@@ -172,9 +172,9 @@ const CLIArgs = union(enum) {
         \\
         \\Examples:
         \\  l1ne start .
-        \\  l1ne start --config=my-services.nix .
-        \\  l1ne simulate --config=scenarios/chaos-test.nix
-        \\  l1ne simulate --config=scenarios/load-test.nix --seed=12345
+        \\  l1ne start --config=src/l1ne/simulator/config/l1ne.nix .
+        \\  l1ne simulate --config=src/l1ne/simulator/scenarios/chaos-test.nix
+        \\  l1ne simulate --config=src/l1ne/simulator/scenarios/load-test.nix --seed=12345
         \\  l1ne wal l1ne.wal --lines=50
         \\  l1ne wal l1ne.wal --follow
         \\
