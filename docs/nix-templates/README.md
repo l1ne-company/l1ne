@@ -4,7 +4,12 @@ Declarative service orchestration with TigerStyle resource bounds.
 
 ## Overview
 
-L1NE uses Nix for declarative service configuration. Similar to how Crane provides composable utilities for Docker images, L1NE provides utilities for service definitions.
+Think of L1NE the same way you think about Docker tooling:
+
+- **Container definition** ⇒ How to boot a single service (like a `Dockerfile`)
+- **Compose definition** ⇒ How many replicas, limits, and orchestration details (like `docker-compose.yml`)
+
+Every service ships its own “container recipe” inside its flake. The top‑level `config.nix` then composes those recipes with limits and wiring.
 
 **Philosophy:**
 - **Declarative:** Describe services in Nix
@@ -14,157 +19,54 @@ L1NE uses Nix for declarative service configuration. Similar to how Crane provid
 
 ## Quick Start
 
-### Basic Service
+### 1. Define the container (service blueprint)
 
 ```nix
-{ pkgs ? import <nixpkgs> {} }:
-
 let
-  l1ne = import ./lib.nix { inherit pkgs; };
-in
-l1ne.mkService {
-  name = "my-api";
-  package = pkgs.my-api;
-  port = 8080;
-}
+  mkDumbServer = {
+    root ? ../../src/l1ne/simulator/dumb-server
+  }:
+  { name, port, memory_mb ? 50, cpu_percent ? 10 }:
+    {
+      inherit name port memory_mb cpu_percent;
+      exec = "${root}/result/bin/dumb-server";
+    };
+in mkDumbServer {} { name = "api"; port = 8080; }
 ```
 
-Deploy:
+This lives next to the service code (inside the flake) and encodes how to launch one instance.
+
+### 2. Compose services (like docker-compose)
+
 ```bash
 l1ne start --config=my-api.nix .
 ```
 
-### Service Mesh
-
 ```nix
-{ pkgs ? import <nixpkgs> {} }:
-
 let
-  l1ne = import ./lib.nix { inherit pkgs; };
-in
-l1ne.mkMesh {
-  name = "my-platform";
-  services = [
-    (l1ne.mkService { name = "web"; package = pkgs.nginx; port = 80; })
-    (l1ne.mkService { name = "api"; package = pkgs.my-api; port = 3000; })
-    (l1ne.mkService { name = "worker"; package = pkgs.my-worker; port = 9090; })
-  ];
+  mkDumbServer = import ../../src/l1ne/simulator/containers/dumb-server.nix { root = ../../src/l1ne/simulator/.; };
+in {
+  runtime = {
+    proxy_connections_max = 256;
+    proxy_buffer_size_kb = 4;
+    cgroup_monitors_max = 4;
+    systemd_buffer_size_kb = 4;
+  };
+
+  services = {
+    max_instances = 4;
+    instances = [
+      (mkDumbServer { name = "frontend"; port = 8081; memory_mb = 64; cpu_percent = 20; })
+      (mkDumbServer { name = "api"; port = 8082; memory_mb = 96; cpu_percent = 30; })
+      (mkDumbServer { name = "ingest"; port = 8083; memory_mb = 80; cpu_percent = 25; })
+    ];
+  };
 }
 ```
 
 ## Library Functions
 
-### `mkService`
-
-Create a service definition.
-
-**Required:**
-- `name` - Unique identifier
-- `package` - Nix derivation with executable
-- `port` - Service port (1024-65535)
-
-**Optional:**
-- `instances` - Instance configuration (default: `{ min = 1; max = 1; start = 1; }`)
-  - `min` - Minimum instances (1-64)
-  - `max` - Maximum instances (1-64)
-  - `start` - Initial instances
-- `args` - Command-line arguments (default: `[]`)
-- `env` - Environment variables (default: `{}`)
-- `resources` - Resource limits (default: 80% CPU, 80% memory)
-- `restart_policy` - "always" | "on-failure" | "never" (default: "always")
-
-**Example (single instance):**
-```nix
-l1ne.mkService {
-  name = "database";
-  package = pkgs.postgresql;
-  port = 5432;
-  instances = {
-    min = 1;
-    max = 1;
-    start = 1;
-  };
-}
-```
-
-**Example (scaled service):**
-```nix
-l1ne.mkService {
-  name = "api";
-  package = pkgs.my-api;
-  port = 3000;
-  instances = {
-    min = 2;    # Always keep 2 instances running
-    max = 10;   # Scale up to 10 under load
-    start = 4;  # Start with 4 instances
-  };
-  args = [ "--workers" "4" ];
-  env = {
-    DATABASE_URL = "postgresql://localhost/db";
-    LOG_LEVEL = "info";
-  };
-  resources = {
-    memory_percent = 75;
-    cpu_percent = 70;
-  };
-}
-```
-
-### `mkMesh`
-
-Create a service mesh (collection of services).
-
-**Required:**
-- `name` - Mesh identifier
-- `services` - List of services
-
-**Optional:**
-- `limits` - Runtime bounds (TigerStyle)
-- `wal_enabled` - Enable Write-Ahead Log (default: `true`)
-- `wal_path` - WAL file location (default: `/var/lib/l1ne/wal`)
-
-**Example:**
-```nix
-l1ne.mkMesh {
-  name = "production";
-  services = [ web api db ];
-  limits = {
-    service_instances_count = 4;
-    proxy_connections_max = 512;
-    proxy_buffer_size_kb = 32;
-  };
-}
-```
-
-### Utility Functions
-
-#### `mergeServices`
-
-Combine multiple service lists.
-
-```nix
-let
-  frontend = [ web cdn ];
-  backend = [ api worker db ];
-in
-l1ne.mergeServices [ frontend backend ]
-```
-
-#### `filterByLabel`
-
-Filter services by label.
-
-```nix
-l1ne.filterByLabel "team" "platform" allServices
-```
-
-#### `applyToAll`
-
-Apply configuration to all services.
-
-```nix
-l1ne.applyToAll { restart_policy = "on-failure"; } services
-```
+The helper utilities in `lib.nix` still exist for richer setups, but you can get started with the simple container → compose pattern above.
 
 ## Runtime Limits (TigerStyle Bounds)
 
