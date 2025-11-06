@@ -2,12 +2,9 @@
 //!
 //! This file imports all L1NE unit tests for execution via `zig build test`.
 //!
-//! Test modules:
-//!   - iops_test.zig: IOPSType and BitSet tests
-//!   - static_allocator_test.zig: StaticAllocator tests
-//!   - config_test.zig: Config and Nix parsing tests
 //!
-//! Run with: zig build test
+//! Run with: `zig build test`. The combined suite lives in `tests.zig`;
+//! add new cases there and they will be picked up automatically.
 
 const std = @import("std");
 
@@ -17,34 +14,9 @@ test {
     std.testing.refAllDecls(@This());
 }
 
-// IOPSType and BitSet comprehensive tests
+// Combined test suite (replaces previous individual *_test files)
 comptime {
-    _ = @import("iops_test.zig");
-}
-
-// StaticAllocator two-phase allocation tests
-comptime {
-    _ = @import("static_allocator_test.zig");
-}
-
-// Config and Nix parsing tests
-comptime {
-    _ = @import("config_test.zig");
-}
-
-// WAL (Write-Ahead Log) tests
-comptime {
-    _ = @import("wal_test.zig");
-}
-
-// Simulator and time abstraction tests
-comptime {
-    _ = @import("simulator_test.zig");
-}
-
-// Transaction system tests
-comptime {
-    _ = @import("transaction_test.zig");
+    _ = @import("tests.zig");
 }
 
 // Also include inline tests from main modules
