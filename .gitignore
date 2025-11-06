@@ -2,4 +2,5 @@
 zig-out/
 *.o
 
-.direnv/result
+.direnv/
+result
