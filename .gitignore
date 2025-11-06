@@ -4,3 +4,4 @@ zig-out/
 
 .direnv/
 result
+benchmark_results.json
