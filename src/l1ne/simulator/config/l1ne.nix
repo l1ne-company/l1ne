@@ -18,28 +18,28 @@
     instances = [
       {
         name = "dumb-server-1";
-        exec = "./dumb-server/result/bin/dumb-server";
+        exec = "../dumb-server/result/bin/dumb-server";
         port = 8080;
         memory_mb = 50;    # Memory limit in MiB
         cpu_percent = 10;  # CPU limit as percentage
       }
       {
         name = "dumb-server-2";
-        exec = "./dumb-server/result/bin/dumb-server";
+        exec = "../dumb-server/result/bin/dumb-server";
         port = 8081;
         memory_mb = 50;
         cpu_percent = 10;
       }
       {
         name = "dumb-server-3";
-        exec = "./dumb-server/result/bin/dumb-server";
+        exec = "../dumb-server/result/bin/dumb-server";
         port = 8082;
         memory_mb = 50;
         cpu_percent = 10;
       }
       {
         name = "dumb-server-4";
-        exec = "./dumb-server/result/bin/dumb-server";
+        exec = "../dumb-server/result/bin/dumb-server";
         port = 8083;
         memory_mb = 50;
         cpu_percent = 10;

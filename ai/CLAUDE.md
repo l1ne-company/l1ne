@@ -9,7 +9,7 @@ L1NE is a monorepo containing independent projects (similar to Rust workspace cr
 - **`src/parsers/nix-zig/`** - Nix language parser producing CST
 - **`src/parsers/ccl-zig/`** - CCL configuration language parser
 - **`src/l1ne/`** - L1NE orchestrator/runtime for managing Nix flake-based services
-- **`dumb-server/`** - Rust-based demo server (separate Nix flake)
+- **`src/l1ne/simulator/dumb-server/`** - Rust-based demo server (separate Nix flake)
 
 Each project is independent and can be developed/tested separately.
 
@@ -41,10 +41,10 @@ nix develop
 
 ### Dumb-server (Rust Component)
 
-The `dumb-server/` directory is a separate Rust project with its own flake.
+The `src/l1ne/simulator/dumb-server/` directory is a separate Rust project with its own flake.
 
 ```bash
-cd dumb-server
+cd src/l1ne/simulator/dumb-server
 nix build              # Build the server
 nix run                # Run the server
 ```

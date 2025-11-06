@@ -481,7 +481,7 @@ Contributions are welcome! When adding features:
 
 1. Add test cases to `test_data/parser/success/` or `test_data/parser/error/`
 2. Run the test suite: `zig build nix-test-all`
-3. Follow the "NO GAMBIARRA" policy (see `CLAUDE.md`)
+3. Follow the "NO GAMBIARRA" policy (see `ai/CLAUDE.md`)
 4. Keep code clean, modular, and efficient
 
 ## Zig Version

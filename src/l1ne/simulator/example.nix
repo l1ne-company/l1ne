@@ -3,7 +3,7 @@
 # This file defines runtime limits and service instances for the L1NE orchestrator.
 # All values must be within compile-time maximums defined in constants.zig.
 #
-# Load with: l1ne start --config=example.nix /path/to/data
+# Load with: l1ne start --config=src/l1ne/simulator/example.nix /path/to/data
 
 {
   # Runtime resource limits
