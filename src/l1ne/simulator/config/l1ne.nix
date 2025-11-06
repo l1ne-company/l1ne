@@ -8,42 +8,21 @@
 # 2. Lock the allocator (transition to static mode)
 # 3. Run forever with bounded memory (no further allocation)
 
-{
-  # Service instances configuration
+let
+  # Container factory: analogous to a Dockerfile for dumb-server
+  mkDumbServer = import ../containers/dumb-server.nix { root = ../.; };
+in {
+  # Service instances configuration (compose layer)
   services = {
     # Maximum number of service instances (compile-time limit: 64)
     max_instances = 4;
 
-    # List of services to deploy
+    # List of services to deploy (each produced by the container factory)
     instances = [
-      {
-        name = "dumb-server-1";
-        exec = "../dumb-server/result/bin/dumb-server";
-        port = 8080;
-        memory_mb = 50;    # Memory limit in MiB
-        cpu_percent = 10;  # CPU limit as percentage
-      }
-      {
-        name = "dumb-server-2";
-        exec = "../dumb-server/result/bin/dumb-server";
-        port = 8081;
-        memory_mb = 50;
-        cpu_percent = 10;
-      }
-      {
-        name = "dumb-server-3";
-        exec = "../dumb-server/result/bin/dumb-server";
-        port = 8082;
-        memory_mb = 50;
-        cpu_percent = 10;
-      }
-      {
-        name = "dumb-server-4";
-        exec = "../dumb-server/result/bin/dumb-server";
-        port = 8083;
-        memory_mb = 50;
-        cpu_percent = 10;
-      }
+      (mkDumbServer { name = "dumb-server-1"; port = 8080; })
+      (mkDumbServer { name = "dumb-server-2"; port = 8081; })
+      (mkDumbServer { name = "dumb-server-3"; port = 8082; })
+      (mkDumbServer { name = "dumb-server-4"; port = 8083; })
     ];
   };
 

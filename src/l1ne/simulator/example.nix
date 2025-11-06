@@ -5,58 +5,40 @@
 #
 # Load with: l1ne start --config=src/l1ne/simulator/example.nix /path/to/data
 
-{
-  # Runtime resource limits
-  # These determine static memory allocation at startup
+let
+  # Container factory: describes how to run a single dumb-server instance
+  mkDumbServer = import ./containers/dumb-server.nix { root = ./.; };
+in {
+  # Runtime resource limits (compose-level, like docker-compose service settings)
   runtime = {
-    # Maximum concurrent proxy connections (compile-time max: 1024)
-    proxy_connections_max = 256;
-
-    # Proxy buffer size in KiB (compile-time max: 16 KiB)
-    proxy_buffer_size_kb = 4;
-
-    # Maximum number of cgroup monitors (compile-time max: 16)
-    cgroup_monitors_max = 4;
-
-    # Systemd communication buffer size in KiB (compile-time max: 16 KiB)
-    systemd_buffer_size_kb = 4;
+    proxy_connections_max = 256;  # Concurrent proxy connections
+    proxy_buffer_size_kb = 4;     # Buffer per connection (KiB)
+    cgroup_monitors_max = 4;      # One per service
+    systemd_buffer_size_kb = 4;   # systemd notify buffer
   };
 
-  # Service instance definitions
+  # Service instance definitions (each created via container factory)
   services = {
-    # Maximum service instances across all services (compile-time max: 16)
     max_instances = 4;
-
-    # List of service instances to deploy
     instances = [
-      {
-        name = "demo-1";
-        exec = "./dumb-server/result/bin/dumb-server";
+      (mkDumbServer {
+        name = "demo-frontend";
         port = 8081;
-        memory_mb = 50;  # Memory limit in MiB
-        cpu_percent = 25; # CPU limit as percentage
-      }
-      {
-        name = "demo-2";
-        exec = "./dumb-server/result/bin/dumb-server";
+        memory_mb = 64;
+        cpu_percent = 20;
+      })
+      (mkDumbServer {
+        name = "demo-api";
         port = 8082;
-        memory_mb = 50;
-        cpu_percent = 25;
-      }
-      {
-        name = "demo-3";
-        exec = "./dumb-server/result/bin/dumb-server";
+        memory_mb = 96;
+        cpu_percent = 30;
+      })
+      (mkDumbServer {
+        name = "demo-ingest";
         port = 8083;
-        memory_mb = 50;
+        memory_mb = 80;
         cpu_percent = 25;
-      }
-      {
-        name = "demo-4";
-        exec = "./dumb-server/result/bin/dumb-server";
-        port = 8084;
-        memory_mb = 50;
-        cpu_percent = 25;
-      }
+      })
     ];
   };
 }
