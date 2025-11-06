@@ -263,46 +263,19 @@ pub fn main() !void {
             std.log.info("Starting L1NE orchestrator", .{});
             std.log.info("State directory: {s}", .{start.state_dir});
 
-            // Load configuration: either from Nix file or CLI arguments
-            var config: config_mod.Config = if (start.config_path) |config_path| blk: {
-                assert(config_path.len > 0); // Config path must be non-empty
-                assert(std.mem.endsWith(u8, config_path, ".nix")); // Must be .nix file
+            // Load configuration from required Nix file
+            const config_path = start.config_path orelse {
+                std.log.err("`l1ne start` now requires --config pointing to a Nix file", .{});
+                return error.ConfigRequired;
+            };
+            assert(config_path.len > 0); // Config path must be non-empty
+            assert(std.mem.endsWith(u8, config_path, ".nix")); // Must be .nix file
 
-                std.log.info("Loading configuration from Nix file: {s}", .{config_path});
+            std.log.info("Loading configuration from Nix file: {s}", .{config_path});
 
-                // Load config from Nix file
-                break :blk config_mod.Config.from_nix_file(allocator, config_path) catch |err| {
-                    std.log.err("Failed to load config from {s}: {any}", .{ config_path, err });
-                    return err;
-                };
-            } else blk: {
-                assert(start.service.len > 0); // Service name must be non-empty
-                assert(start.exec_path.len > 0); // Exec path must be non-empty
-                assert(start.nodes.len > 0); // Must have at least one node
-
-                std.log.info("Using CLI configuration", .{});
-
-                // Allocate services array
-                const services_slice = try allocator.alloc(config_mod.ServiceConfig, start.nodes.len);
-                for (start.nodes.slice(), 0..) |node_addr, i| {
-                    const name = try std.fmt.allocPrint(allocator, "{s}-{d}", .{ start.service, i + 1 });
-                    services_slice[i] = .{
-                        .name = name,
-                        .exec_path = start.exec_path,
-                        .port = node_addr.getPort(),
-                        .memory_mb = 50,
-                        .cpu_percent = 10,
-                    };
-                }
-
-                var limits = constants.default_limits;
-                limits.service_instances_count = @intCast(start.nodes.len);
-
-                break :blk config_mod.Config{
-                    .limits = limits,
-                    .services = services_slice,
-                    .allocator = allocator,
-                };
+            var config = config_mod.Config.from_nix_file(allocator, config_path) catch |err| {
+                std.log.err("Failed to load config from {s}: {any}", .{ config_path, err });
+                return err;
             };
             defer config.deinit();
 

@@ -41,7 +41,7 @@ pub const Master = struct {
         };
 
         const ResourceLimits = struct {
-            memory_percent: u8,
+            memory_mb: u32,
             cpu_percent: u8,
         };
     };
@@ -113,7 +113,7 @@ pub const Master = struct {
                 service_config.exec_path,
                 addr,
                 .{
-                    .memory_percent = @intCast(service_config.memory_mb),
+                    .memory_mb = service_config.memory_mb,
                     .cpu_percent = service_config.cpu_percent,
                 },
             );
@@ -342,13 +342,13 @@ pub const Master = struct {
 
         var svc_mgr = systemd.ServiceManager.init(self.allocator);
 
-        // Convert percentages to actual values
-        // Base: 50M memory, 10% CPU (from dumb-server)
-        const memory_max: u64 = @as(u64, 50 * types.MIB) * @as(u64, limits.memory_percent) / 100;
-        const cpu_quota: u8 = @intCast(@as(u16, 10) * @as(u16, limits.cpu_percent) / 100);
+        // Convert service limits into systemd resource settings
+        const memory_max_bytes = @as(u64, limits.memory_mb) * types.MIB;
+        const cpu_quota = limits.cpu_percent;
 
-        assert(memory_max > 0); // Must have non-zero memory
+        assert(memory_max_bytes > 0); // Must have non-zero memory
         assert(cpu_quota > 0); // Must have non-zero CPU
+        const memory_max: usize = @intCast(memory_max_bytes);
 
         // Setup environment with PORT
         var env_map = std.StringHashMap([]const u8).init(self.allocator);
