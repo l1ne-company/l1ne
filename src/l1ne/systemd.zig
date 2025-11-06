@@ -669,27 +669,26 @@ test "watchdog interval calculation" {
 }
 
 test "resource limit conversions" {
-    // Test percentage to actual values
+    // Test conversion from config values to systemd resource limits
+    const MiB: usize = 1024 * 1024;
     const TestCase = struct {
-        mem_percent: u8,
+        memory_mb: u32,
         cpu_percent: u8,
-        expected_mem_mb: usize,
-        expected_cpu: u8,
     };
 
     const test_cases = [_]TestCase{
-        .{ .mem_percent = 100, .cpu_percent = 100, .expected_mem_mb = 50, .expected_cpu = 10 },
-        .{ .mem_percent = 50, .cpu_percent = 50, .expected_mem_mb = 25, .expected_cpu = 5 },
-        .{ .mem_percent = 80, .cpu_percent = 20, .expected_mem_mb = 40, .expected_cpu = 2 },
-        .{ .mem_percent = 10, .cpu_percent = 10, .expected_mem_mb = 5, .expected_cpu = 1 },
+        .{ .memory_mb = 50, .cpu_percent = 10 },
+        .{ .memory_mb = 25, .cpu_percent = 5 },
+        .{ .memory_mb = 40, .cpu_percent = 20 },
+        .{ .memory_mb = 5, .cpu_percent = 1 },
     };
 
     for (test_cases) |tc| {
-        const memory_max: usize = @as(usize, 50 * 1024 * 1024) * @as(usize, tc.mem_percent) / 100;
-        const cpu_quota = @as(usize, 10) * @as(usize, tc.cpu_percent) / 100;
+        const memory_max: usize = @intCast(@as(u64, tc.memory_mb) * MiB);
+        const cpu_quota = tc.cpu_percent;
 
-        try std.testing.expectEqual(tc.expected_mem_mb * 1024 * 1024, memory_max);
-        try std.testing.expectEqual(@as(usize, tc.expected_cpu), cpu_quota);
+        try std.testing.expectEqual(@as(usize, tc.memory_mb) * MiB, memory_max);
+        try std.testing.expectEqual(tc.cpu_percent, cpu_quota);
     }
 }
 

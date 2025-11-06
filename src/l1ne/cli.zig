@@ -86,9 +86,9 @@ const CLIArgs = union(enum) {
         address: ?[]const u8 = null, // Bind address for control plane
         cache_size: ?ByteSize = null,
 
-        // Resource limits - POC uses FAAS (Femboy-as-a-Service) percentages
-        mem_percent: u8 = 50, // 1-100% of FAAS limit
-        cpu_percent: u8 = 50, // 1-100% of FAAS limit
+        // Resource limits expressed as percentages of the configured maxima
+        mem_percent: u8 = 50, // 1-100% of the memory ceiling
+        cpu_percent: u8 = 50, // 1-100% of the CPU ceiling
 
         development: bool = false,
         positional: struct {
@@ -105,9 +105,7 @@ const CLIArgs = union(enum) {
         sre: bool = false,
         replica: ?u8 = null,
         max_replica: ?u8 = null,
-        // because is a POC the CPU & memory maximun will be defined here dummy-service (FAAS: Femboy-as-a-Service)
-        // and cpu_max & mem_max weill represent percentage of the maximum of the amount of the pre-limite defined inside o FAAS
-        // data in percentage 1-100 of the FAAS limit not actually computer poc only
+        // Optional explicit maxima for legacy testing flows
         mem_max: ?u8 = null,
         cpu_max: ?u8 = null,
 
@@ -208,8 +206,8 @@ pub const Command = union(enum) {
         exec_path: []const u8, // Binary path to execute
         nodes: Addresses, // Nodes to deploy to (one service per node)
         bind: std.net.Address, // Control plane bind address
-        mem_percent: u8, // FAAS memory percentage
-        cpu_percent: u8, // FAAS CPU percentage
+        mem_percent: u8, // Memory percentage
+        cpu_percent: u8, // CPU percentage
         state_dir: []const u8,
         development: bool,
         log_debug: bool,
