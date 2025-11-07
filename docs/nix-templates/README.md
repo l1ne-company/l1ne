@@ -6,10 +6,10 @@ Declarative service orchestration with TigerStyle resource bounds.
 
 Think of L1NE the same way you think about Docker tooling:
 
-- **Container definition** ⇒ How to boot a single service (like a `Dockerfile`)
+- **Service flake** ⇒ Build an executable with an entrypoint (like a `Dockerfile`)
 - **Compose definition** ⇒ How many replicas, limits, and orchestration details (like `docker-compose.yml`)
 
-Every service ships its own “container recipe” inside its flake. The top‑level `config.nix` then composes those recipes with limits and wiring.
+Every service ships its own flake that builds the executable. Run `nix build` inside that flake to materialize `./result/bin/<binary>` and then reference that path from your simulation config.
 
 **Philosophy:**
 - **Declarative:** Describe services in Nix
@@ -19,22 +19,14 @@ Every service ships its own “container recipe” inside its flake. The top‑l
 
 ## Quick Start
 
-### 1. Define the container (service blueprint)
+### 1. Build the service binary
 
-```nix
-let
-  mkDumbServer = {
-    root ? ../../src/l1ne/simulator/dumb-server
-  }:
-  { name, port, memory_mb ? 50, cpu_percent ? 10 }:
-    {
-      inherit name port memory_mb cpu_percent;
-      exec = "${root}/result/bin/dumb-server";
-    };
-in mkDumbServer {} { name = "api"; port = 8080; }
+```bash
+cd src/l1ne/simulator/dumb-server
+nix build .#dumb-server
 ```
 
-This lives next to the service code (inside the flake) and encodes how to launch one instance.
+The flake drops `./result/bin/dumb-server`, which is the exact path the simulator needs.
 
 ### 2. Compose services (like docker-compose)
 
@@ -44,7 +36,13 @@ l1ne start --config=my-api.nix .
 
 ```nix
 let
-  mkDumbServer = import ../../src/l1ne/simulator/containers/dumb-server.nix { root = ../../src/l1ne/simulator/.; };
+  dumbServer = ../../src/l1ne/simulator/dumb-server/result/bin/dumb-server;
+  mkService =
+    { name, port, memory_mb ? 50, cpu_percent ? 10 }:
+    {
+      inherit name port memory_mb cpu_percent;
+      exec = dumbServer;
+    };
 in {
   runtime = {
     proxy_connections_max = 256;
@@ -56,9 +54,9 @@ in {
   services = {
     max_instances = 4;
     instances = [
-      (mkDumbServer { name = "frontend"; port = 8081; memory_mb = 64; cpu_percent = 20; })
-      (mkDumbServer { name = "api"; port = 8082; memory_mb = 96; cpu_percent = 30; })
-      (mkDumbServer { name = "ingest"; port = 8083; memory_mb = 80; cpu_percent = 25; })
+      (mkService { name = "frontend"; port = 8081; memory_mb = 64; cpu_percent = 20; })
+      (mkService { name = "api"; port = 8082; memory_mb = 96; cpu_percent = 30; })
+      (mkService { name = "ingest"; port = 8083; memory_mb = 80; cpu_percent = 25; })
     ];
   };
 }
@@ -66,7 +64,7 @@ in {
 
 ## Library Functions
 
-The helper utilities in `lib.nix` still exist for richer setups, but you can get started with the simple container → compose pattern above.
+The helper utilities in `lib.nix` still exist for richer setups, but you can get started with the simple “flake build → compose config” pattern above.
 
 ## Runtime Limits (TigerStyle Bounds)
 
