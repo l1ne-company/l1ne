@@ -1,62 +1,74 @@
-# L1NE Configuration
+# L1NE Simulation Config
 #
-# This Nix file defines the static memory allocation limits for L1NE.
-# All resources are allocated at startup based on these limits.
-#
-# After reading this config, L1NE will:
-# 1. Allocate exactly the specified amount of memory
-# 2. Lock the allocator (transition to static mode)
-# 3. Run forever with bounded memory (no further allocation)
+# Everything lives in this file so it is easy to reason about replicas during
+# simulator runs. Each service describes its executable plus a scaling block that
+# records the intended minimum, starting, and maximum replica counts. The core
+# orchestrator still reads the standard fields (name/exec/port/memory/cpu),
+# while the extra `scaling` attribute is purely informational for simulation.
 
-let
-  # Container factory: analogous to a Dockerfile for dumb-server
-  mkDumbServer = import ../containers/dumb-server.nix { root = ../.; };
-in {
-  # Service instances configuration (compose layer)
+{
   services = {
-    # Maximum number of service instances (compile-time limit: 64)
-    max_instances = 4;
+    max_instances = 12;
 
-    # List of services to deploy (each produced by the container factory)
     instances = [
-      (mkDumbServer { name = "dumb-server-1"; port = 8080; })
-      (mkDumbServer { name = "dumb-server-2"; port = 8081; })
-      (mkDumbServer { name = "dumb-server-3"; port = 8082; })
-      (mkDumbServer { name = "dumb-server-4"; port = 8083; })
+      {
+        name = "frontend";
+        exec = "../dumb-server/result/bin/dumb-server";
+        port = 8081;
+        memory_mb = 64;
+        cpu_percent = 20;
+        scaling = {
+          min = 1;
+          start = 2;
+          max = 4;
+        };
+      }
+
+      {
+        name = "api";
+        exec = "../dumb-server/result/bin/dumb-server";
+        port = 8082;
+        memory_mb = 96;
+        cpu_percent = 30;
+        scaling = {
+          min = 2;
+          start = 3;
+          max = 6;
+        };
+      }
+
+      {
+        name = "worker";
+        exec = "../dumb-server/result/bin/dumb-server";
+        port = 8083;
+        memory_mb = 80;
+        cpu_percent = 25;
+        scaling = {
+          min = 1;
+          start = 1;
+          max = 3;
+        };
+      }
+
+      {
+        name = "ingest";
+        exec = "../dumb-server/result/bin/dumb-server";
+        port = 8084;
+        memory_mb = 72;
+        cpu_percent = 22;
+        scaling = {
+          min = 1;
+          start = 1;
+          max = 2;
+        };
+      }
     ];
   };
 
-  # Runtime resource limits
-  # These determine static memory allocation at startup
   runtime = {
-    # Maximum concurrent proxy connections (compile-time limit: 4096)
-    # When this limit is reached, new connections are rejected (natural backpressure)
     proxy_connections_max = 256;
-
-    # Size of read buffer per proxy connection in KiB (compile-time limit: 64 KiB)
-    # Total proxy memory = proxy_connections_max × proxy_buffer_size_kb
-    # Example: 256 connections × 4 KiB = 1 MiB
     proxy_buffer_size_kb = 4;
-
-    # Maximum number of cgroup monitors (typically one per service)
-    # (compile-time limit: 64)
     cgroup_monitors_max = 4;
-
-    # Size of systemd notification/status message buffer in KiB
-    # (compile-time limit: 16 KiB)
     systemd_buffer_size_kb = 4;
   };
-
-  # Expected memory usage with these settings:
-  #
-  # Service instances:    4 × ~512 B      = ~2 KiB
-  # Proxy connections:    256 × ~256 B    = ~64 KiB
-  # Proxy buffers:        256 × 4 KiB     = 1 MiB
-  # Cgroup monitors:      4 × ~128 B      = ~512 B
-  # Systemd buffer:       4 KiB           = 4 KiB
-  # IOPs bitset overhead: 8 B × 4 pools   = 32 B
-  # -----------------------------------------------
-  # Total:                                ~1.1 MiB
-  #
-  # This is deterministic and bounded. No allocation after startup.
 }
