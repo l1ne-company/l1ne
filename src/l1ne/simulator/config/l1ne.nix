@@ -1,5 +1,9 @@
 # L1NE Simulation Config
 #
+# Build the demo service once before running simulations:
+#   cd ../dumb-server
+#   nix build .#dumb-server
+#
 # Everything lives in this file so it is easy to reason about replicas during
 # simulator runs. Each service describes its executable plus a scaling block that
 # records the intended minimum, starting, and maximum replica counts. The core
