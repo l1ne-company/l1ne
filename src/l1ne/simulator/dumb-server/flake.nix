@@ -3,81 +3,67 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    rust-module.url = "github:l1ne-company/rust-module";
+    one-for-all.url = "git+file:../../../../libs/one-for-all";
   };
 
-  outputs = { self, nixpkgs, rust-module, ... }:
+  outputs = { self, nixpkgs, one-for-all, ... }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-      forAllSystems = nixpkgs.lib.genAttrs systems;
-
-      # Project constants
-      PNAME = "dumb-server";
-      PORT = "6969";
-
-      # Build project for each system
-      projectFor = system:
+      genSystems = nixpkgs.lib.genAttrs systems;
+      contextFor =
+        system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-        in
-          rust-module.lib.mkRustProject {
-            inherit pkgs PNAME;
-            src = ./.;
+          lib = pkgs.lib;
+          oneForAllLib = one-for-all.lib.mkLib pkgs;
+          src = oneForAllLib.cleanCargoSource ./.;
+          commonArgs = {
+            inherit src;
+            strictDeps = true;
+            buildInputs = [ ]
+              ++ lib.optionals pkgs.stdenv.isDarwin [
+                pkgs.libiconv
+              ];
           };
-    in {
-      # Standard outputs using rust-module
-      packages = forAllSystems (system: {
-        default = (projectFor system).package;
-      });
-
-      devShells = forAllSystems (system: {
-        default = (projectFor system).devShell;
-      });
-
-      checks = forAllSystems (system:
-        (projectFor system).checks
-      );
-
-      # NixOS module with systemd service + nginx
-      nixosModules.default = { pkgs, lib, config, ... }:
+          cargoArtifacts = oneForAllLib.buildDepsOnly commonArgs;
+        in
         let
-          cfg = config.services.dumb-server;
+          package = oneForAllLib.buildPackage (
+            commonArgs
+            // {
+              inherit cargoArtifacts;
+            }
+          );
         in {
-          options.services.dumb-server = {
-            enable = lib.mkEnableOption "dumb-server";
-            port = lib.mkOption {
-              type = lib.types.port;
-              default = 6969;
-              description = "Port for dumb-server";
+          inherit package;
+          checks = {
+            dumb-server = package;
+            dumb-server-clippy = oneForAllLib.cargoClippy (
+              commonArgs
+              // {
+                inherit cargoArtifacts;
+                cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+              }
+            );
+            dumb-server-fmt = oneForAllLib.cargoFmt {
+              inherit src;
+            };
+            dumb-server-audit = oneForAllLib.cargoAudit {
+              inherit src;
             };
           };
-
-          config = lib.mkIf cfg.enable (lib.mkMerge [
-            # Systemd service from rust-module
-            (rust-module.lib.mkRustSystemdService {
-              inherit lib pkgs;
-              inherit PNAME;
-              PORT = toString cfg.port;
-              config = { packages.default = self.packages.${pkgs.system}.default; };
-              binaryName = "dumb-server";
-              startCommand = "dumb-server";
-            })
-
-            # Nginx reverse proxy
-            {
-              services.nginx = {
-                enable = true;
-                recommendedProxySettings = true;
-                recommendedOptimisation = true;
-                virtualHosts.default = {
-                  default = true;
-                  locations."/".proxyPass = "http://localhost:${toString cfg.port}";
-                };
-              };
-
-              networking.firewall.allowedTCPPorts = [ 80 cfg.port ];
-            }
-          ]);
         };
+    in {
+      packages = genSystems (
+        system:
+        let
+          ctx = contextFor system;
+        in {
+          default = ctx.package;
+          dumb-server = ctx.package;
+        }
+      );
+
+      checks = genSystems (system: (contextFor system).checks);
     };
 }
