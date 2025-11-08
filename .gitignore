@@ -3,5 +3,5 @@ zig-out/
 *.o
 
 .direnv/
-result
+*result
 benchmark_results.json
