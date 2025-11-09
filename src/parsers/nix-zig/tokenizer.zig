@@ -21,39 +21,51 @@ pub const Tokenizer = struct {
     source: []const u8,
     pos: usize = 0,
     ctx_stack: std.ArrayList(Context),
+    saved_ctx_buffer: std.ArrayList(Context),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, source: []const u8) !Tokenizer {
         return .{
             .source = source,
             .ctx_stack = std.ArrayList(Context){},
+            .saved_ctx_buffer = std.ArrayList(Context){},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Tokenizer) void {
         self.ctx_stack.deinit(self.allocator);
+        self.saved_ctx_buffer.deinit(self.allocator);
     }
 
     pub const State = struct {
         pos: usize,
-        ctx_stack_snapshot: []const Context,
+        ctx_offset: usize,
+        ctx_len: usize,
     };
 
-    pub fn saveState(self: *const Tokenizer) State {
+    pub fn saveState(self: *Tokenizer) State {
+        const offset = self.saved_ctx_buffer.items.len;
+        const len = self.ctx_stack.items.len;
+        self.saved_ctx_buffer.ensureTotalCapacity(self.allocator, offset + len) catch unreachable;
+        self.saved_ctx_buffer.appendSliceAssumeCapacity(self.ctx_stack.items);
         return .{
             .pos = self.pos,
-            .ctx_stack_snapshot = self.ctx_stack.items,
+            .ctx_offset = offset,
+            .ctx_len = len,
         };
     }
 
     pub fn restoreState(self: *Tokenizer, state: State) void {
+        std.debug.assert(state.ctx_offset + state.ctx_len <= self.saved_ctx_buffer.items.len);
         self.pos = state.pos;
-        // Restore context stack to the saved state
         self.ctx_stack.shrinkRetainingCapacity(0);
-        for (state.ctx_stack_snapshot) |ctx| {
-            self.ctx_stack.appendAssumeCapacity(ctx);
+        if (state.ctx_len > 0) {
+            self.ctx_stack.ensureTotalCapacity(self.allocator, state.ctx_len) catch unreachable;
+            const slice = self.saved_ctx_buffer.items[state.ctx_offset .. state.ctx_offset + state.ctx_len];
+            self.ctx_stack.appendSliceAssumeCapacity(slice);
         }
+        self.saved_ctx_buffer.shrinkRetainingCapacity(state.ctx_offset);
     }
 
     fn peek(self: *const Tokenizer, offset: usize) ?u8 {
