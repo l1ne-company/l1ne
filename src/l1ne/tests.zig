@@ -465,7 +465,7 @@ test "BitSet: initialization" {
     const bs: BitSet = .{};
 
     try testing.expectEqual(@as(u7, 0), bs.count());
-    try testing.expectEqual(@as(?u6, 0), bs.first_unset());
+    try testing.expectEqual(@as(?u6, 0), bs.first_unset(64));
     try testing.expect(!bs.is_set(0));
     try testing.expect(!bs.is_set(63));
 }
@@ -515,18 +515,18 @@ test "BitSet: first_unset correctness" {
     var bs: BitSet = .{};
 
     // Initially returns 0
-    try testing.expectEqual(@as(?u6, 0), bs.first_unset());
+    try testing.expectEqual(@as(?u6, 0), bs.first_unset(64));
 
     // Set bit 0, should return 1
     bs.set(0);
-    try testing.expectEqual(@as(?u6, 1), bs.first_unset());
+    try testing.expectEqual(@as(?u6, 1), bs.first_unset(64));
 
     // Set bits 1-4, should return 5
     bs.set(1);
     bs.set(2);
     bs.set(3);
     bs.set(4);
-    try testing.expectEqual(@as(?u6, 5), bs.first_unset());
+    try testing.expectEqual(@as(?u6, 5), bs.first_unset(64));
 
     // Set all bits except 10
     var i: u8 = 0;
@@ -536,11 +536,11 @@ test "BitSet: first_unset correctness" {
             if (!bs.is_set(idx)) bs.set(idx);
         }
     }
-    try testing.expectEqual(@as(?u6, 10), bs.first_unset());
+    try testing.expectEqual(@as(?u6, 10), bs.first_unset(64));
 
     // Set bit 10, should return null (all full)
     bs.set(10);
-    try testing.expectEqual(@as(?u6, null), bs.first_unset());
+    try testing.expectEqual(@as(?u6, null), bs.first_unset(64));
     try testing.expectEqual(@as(u7, 64), bs.count());
 }
 
@@ -561,7 +561,7 @@ test "BitSet: full pool scenario" {
     }
 
     try testing.expectEqual(@as(u7, 64), bs.count());
-    try testing.expectEqual(@as(?u6, null), bs.first_unset());
+    try testing.expectEqual(@as(?u6, null), bs.first_unset(64));
 
     // Verify all bits are set
     i = 0;

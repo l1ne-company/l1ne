@@ -17,6 +17,7 @@ const assert = std.debug.assert;
 /// These are compile-time constants for safety
 pub const max_service_instances: u8 = 64; // Maximum services per L1NE instance
 pub const max_proxy_connections: u32 = 4096; // Maximum concurrent proxy connections
+pub const max_proxy_pool_connections: u8 = 64; // Hardware-backed pool capacity
 pub const max_proxy_buffer_size: u32 = 64 * types.KIB; // Maximum buffer per connection
 pub const max_cgroup_monitors: u8 = 64; // Maximum cgroup monitors
 pub const max_systemd_buffer_size: u32 = 16 * types.KIB; // Maximum systemd message buffer

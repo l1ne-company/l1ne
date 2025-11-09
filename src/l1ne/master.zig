@@ -8,6 +8,11 @@ const constants = @import("constants.zig");
 const config_mod = @import("config.zig");
 const iops = @import("iops.zig");
 
+const ACCEPT_BATCH = 8;
+const MAX_UNHEALTHY_BATCHES: u32 = 5;
+const ACCEPT_BACKOFF_NS: u64 = 10 * types.MILLISEC;
+const MAX_ACCEPT_IDLE_BATCHES: u32 = 100;
+
 /// Master orchestrator that manages service instances
 /// Uses static memory allocation - all resources bounded at compile time
 pub const Master = struct {
@@ -17,8 +22,10 @@ pub const Master = struct {
 
     // Static pools - sized from RuntimeLimits at init
     services: types.BoundedArray(ServiceInstance, constants.max_service_instances),
-    proxy_connections: iops.IOPSType(types.ProxyConnection, 64),  // Max 64 for BitSet
-    proxy_buffers: iops.IOPSType([4096]u8, 64), // Match proxy_connections size
+    proxy_connections: iops.IOPSType(types.ProxyConnection, constants.max_proxy_pool_connections),
+    proxy_buffers: iops.IOPSType([constants.max_proxy_buffer_size]u8, constants.max_proxy_pool_connections),
+    proxy_connection_limit: u8,
+    proxy_buffer_len: u32,
 
     systemd_notifier: ?systemd.Notifier,
     watchdog: ?systemd.Watchdog,
@@ -65,13 +72,29 @@ pub const Master = struct {
         // Log memory allocation plan
         limits.format_memory_usage();
 
+        if (limits.proxy_connections_max == 0 or limits.proxy_connections_max > constants.max_proxy_pool_connections) {
+            std.log.err(
+                "proxy_connections_max ({d}) exceeds pool capacity ({d})",
+                .{ limits.proxy_connections_max, constants.max_proxy_pool_connections },
+            );
+            return error.ProxyPoolLimitExceeded;
+        }
+
+        var proxy_connections = iops.IOPSType(types.ProxyConnection, constants.max_proxy_pool_connections){};
+        proxy_connections.configureActiveSlots(@intCast(limits.proxy_connections_max));
+
+        var proxy_buffers = iops.IOPSType([constants.max_proxy_buffer_size]u8, constants.max_proxy_pool_connections){};
+        proxy_buffers.configureActiveSlots(@intCast(limits.proxy_connections_max));
+
         return Master{
             .allocator = allocator,
             .limits = limits,
             .bind_address = bind_address,
             .services = types.BoundedArray(ServiceInstance, constants.max_service_instances).init(),
-            .proxy_connections = .{},
-            .proxy_buffers = .{},
+            .proxy_connections = proxy_connections,
+            .proxy_buffers = proxy_buffers,
+            .proxy_connection_limit = @intCast(limits.proxy_connections_max),
+            .proxy_buffer_len = limits.proxy_buffer_size,
             .systemd_notifier = notifier,
             .watchdog = watchdog,
         };
@@ -141,9 +164,19 @@ pub const Master = struct {
 
         std.log.info("L1NE orchestrator listening on {any}", .{self.bind_address});
         std.log.info("Managing {any} service instances", .{self.services.len});
-        std.log.info("Proxy pool: {any} connections max", .{self.proxy_connections.items.len});
+        std.log.info(
+            "Proxy pool: {d}/{d} connections max",
+            .{ self.proxy_connection_limit, self.proxy_connections.capacity_total() },
+        );
+        std.log.info(
+            "Proxy buffer length: {d} B (max {d} B)",
+            .{ self.proxy_buffer_len, constants.max_proxy_buffer_size },
+        );
 
         // Main loop - runs forever with bounded memory
+        var no_healthy_batches: u32 = 0;
+        var idle_batches: u32 = 0;
+
         while (true) {
             assert(!self.services.is_empty()); // Must have services
 
@@ -152,25 +185,57 @@ pub const Master = struct {
                 try wd.keepaliveIfNeeded();
             }
 
-            // Accept connections and load balance
-            if (server.accept()) |conn| {
+            var batch_progress = false;
+
+            var batch_index: usize = 0;
+            while (batch_index < ACCEPT_BATCH) : (batch_index += 1) {
+                const conn = server.accept() catch |err| switch (err) {
+                    error.WouldBlock => break,
+                    else => {
+                        std.log.err("Accept error: {any}", .{err});
+                        idle_batches += 1;
+                        if (idle_batches >= MAX_ACCEPT_IDLE_BATCHES) {
+                            return err;
+                        }
+                        break;
+                    },
+                };
+
+                batch_progress = true;
+                idle_batches = 0;
+
                 // Round-robin load balancing
                 const instance = self.selectHealthyInstance() orelse {
-                    std.log.warn("No healthy instances, dropping connection", .{});
+                    no_healthy_batches += 1;
+                    std.log.err(
+                        "No healthy instances; dropping connection (cycle {d}/{d})",
+                        .{ no_healthy_batches, MAX_UNHEALTHY_BATCHES },
+                    );
+                    conn.stream.close();
+                    if (no_healthy_batches >= MAX_UNHEALTHY_BATCHES) {
+                        std.log.err("Fatal: no healthy instances for {d} consecutive batches", .{MAX_UNHEALTHY_BATCHES});
+                        return error.NoHealthyInstances;
+                    }
                     conn.stream.close();
                     continue;
                 };
 
+                no_healthy_batches = 0;
                 // Forward to selected instance (with backpressure)
                 self.forwardConnection(conn, instance) catch |err| {
                     std.log.err("Failed to forward connection: {any}", .{err});
                 };
-            } else |err| {
-                if (err == error.WouldBlock) {
-                    std.Thread.sleep(10 * types.MILLISEC);
-                    continue;
+            }
+
+            if (!batch_progress) {
+                idle_batches += 1;
+                if (idle_batches >= MAX_ACCEPT_IDLE_BATCHES) {
+                    std.log.err("Accept loop stalled after {d} idle batches", .{MAX_ACCEPT_IDLE_BATCHES});
+                    return error.AcceptLoopStalled;
                 }
-                return err;
+                std.Thread.sleep(ACCEPT_BACKOFF_NS);
+            } else {
+                idle_batches = 0;
             }
         }
     }
@@ -480,27 +545,30 @@ pub const Master = struct {
         defer conn.stream.close();
 
         // Acquire TWO buffers (one for each direction)
-        const buffer_c2b = self.proxy_buffers.acquire() orelse {
+        const buffer_c2b_mem = self.proxy_buffers.acquire() orelse {
             std.log.warn("Proxy buffer pool exhausted ({d}/{d}), dropping connection", .{
                 self.proxy_buffers.busy_count(),
-                self.proxy_buffers.items.len,
+                self.proxy_buffers.activeCapacity(),
             });
             return error.ResourceExhausted;
         };
-        defer self.proxy_buffers.release(buffer_c2b);
+        defer self.proxy_buffers.release(buffer_c2b_mem);
 
-        const buffer_b2c = self.proxy_buffers.acquire() orelse {
+        const buffer_b2c_mem = self.proxy_buffers.acquire() orelse {
             std.log.warn("Proxy buffer pool exhausted for return path ({d}/{d})", .{
                 self.proxy_buffers.busy_count(),
-                self.proxy_buffers.items.len,
+                self.proxy_buffers.activeCapacity(),
             });
             return error.ResourceExhausted;
         };
-        defer self.proxy_buffers.release(buffer_b2c);
+        defer self.proxy_buffers.release(buffer_b2c_mem);
 
-        assert(@intFromPtr(buffer_c2b) != 0); // Buffer must be valid
-        assert(@intFromPtr(buffer_b2c) != 0); // Buffer must be valid
-        assert(@intFromPtr(buffer_c2b) != @intFromPtr(buffer_b2c)); // Must be different buffers
+        const buffer_c2b = buffer_c2b_mem[0..self.proxy_buffer_len];
+        const buffer_b2c = buffer_b2c_mem[0..self.proxy_buffer_len];
+
+        assert(@intFromPtr(buffer_c2b.ptr) != 0); // Buffer must be valid
+        assert(@intFromPtr(buffer_b2c.ptr) != 0); // Buffer must be valid
+        assert(@intFromPtr(buffer_c2b.ptr) != @intFromPtr(buffer_b2c.ptr)); // Must be different buffers
 
         // Connect to backend service
         const backend = try self.connectToBackend(instance.address);
@@ -509,7 +577,7 @@ pub const Master = struct {
         // Perform bidirectional proxy
         try self.proxyBidirectional(conn.stream, backend, buffer_c2b, buffer_b2c);
 
-        assert(self.proxy_buffers.busy_count() <= self.proxy_buffers.items.len); // Sanity check
+        assert(self.proxy_buffers.busy_count() <= self.proxy_buffers.activeCapacity()); // Sanity check
     }
 
     /// Connect to backend service with proper error handling

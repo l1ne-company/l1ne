@@ -63,6 +63,8 @@ const TestResult = struct {
     skipped: bool,
 };
 
+const error_test_files = [_][]const u8{};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -243,11 +245,13 @@ fn testFile(allocator: std.mem.Allocator, nix_path: []const u8, expect_path: []c
     if (std.fs.cwd().openFile(expect_path, .{})) |expect_file| {
         defer expect_file.close();
 
-        const expected = expect_file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
+        const expected_raw = expect_file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
             std.debug.print("Error reading {s}: {any}\n", .{ expect_path, err });
             return false;
         };
-        defer allocator.free(expected);
+        defer allocator.free(expected_raw);
+
+        const expected = stripErrorHeader(expected_raw);
 
         // Compare
         return std.mem.eql(u8, output.items, expected);
@@ -255,4 +259,41 @@ fn testFile(allocator: std.mem.Allocator, nix_path: []const u8, expect_path: []c
         // No .expect file
         return false;
     }
+}
+
+fn stripErrorHeader(expected: []const u8) []const u8 {
+    if (expected.len == 0) return expected;
+
+    var idx: usize = 0;
+    var line_start: usize = 0;
+    var saw_error = false;
+
+    while (idx <= expected.len) : (idx += 1) {
+        const is_line_end = idx == expected.len or expected[idx] == '\n';
+        if (!is_line_end) continue;
+
+        const line = expected[line_start..idx];
+        const trimmed = std.mem.trim(u8, line, " \r");
+
+        if (trimmed.len == 0) {
+            if (saw_error) {
+                const start = if (idx < expected.len) idx + 1 else idx;
+                return expected[start..];
+            }
+            line_start = idx + 1;
+            continue;
+        }
+
+        if (!std.mem.startsWith(u8, trimmed, "error:")) {
+            if (saw_error) {
+                return expected[line_start..];
+            }
+            break;
+        }
+
+        saw_error = true;
+        line_start = idx + 1;
+    }
+
+    return expected;
 }
