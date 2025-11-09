@@ -41,22 +41,23 @@ pub const BitSet = struct {
     ///   - Pre: self.bits is valid u64
     ///   - Post: returned index is < 64, or null if all bits set
     ///   - Does not modify state
-    pub fn first_unset(self: *const BitSet) ?u6 {
-        assert(self.bits <= std.math.maxInt(u64)); // Ensure valid bit state
+    pub fn first_unset(self: *const BitSet, active_bits: u7) ?u6 {
+        assert(active_bits > 0 and active_bits <= 64);
 
-        const initial_count = self.count();
-        assert(initial_count <= 64); // Cannot have more than 64 set bits
+        const mask: u64 = if (active_bits == 64)
+            std.math.maxInt(u64)
+        else blk: {
+            const capped_bits: u6 = @intCast(active_bits);
+            break :blk (@as(u64, 1) << capped_bits) - 1;
+        };
 
-        if (self.bits == std.math.maxInt(u64)) {
-            // All 64 bits are set - pool is full
+        const inverted = (~self.bits) & mask;
+        if (inverted == 0) {
             return null;
         }
 
-        // Find first zero bit using bitwise NOT and trailing zero count
-        const inverted = ~self.bits;
         const index = @ctz(inverted);
-
-        assert(index < 64); // Ensure result is valid
+        assert(index < active_bits);
         return @intCast(index);
     }
 
@@ -135,6 +136,7 @@ pub fn IOPSType(comptime T: type, comptime capacity: u8) type {
     return struct {
         items: [capacity]T = undefined,
         busy: BitSet = .{},
+        active_slots: u7 = capacity,
 
         const IOPS = @This();
 
@@ -151,23 +153,15 @@ pub fn IOPSType(comptime T: type, comptime capacity: u8) type {
         /// Performance: O(1) - hardware @ctz instruction
         pub fn acquire(self: *IOPS) ?*T {
             assert(@intFromPtr(self) != 0); // Self must be valid
+            assert(self.active_slots > 0 and self.active_slots <= capacity);
 
             const old_busy = self.busy_count();
-            assert(old_busy <= capacity); // Cannot exceed capacity
+            assert(old_busy <= self.active_slots); // Cannot exceed configured limit
 
-            const slot_index = self.busy.first_unset() orelse {
-                // Pool exhausted - caller must handle backpressure
-                assert(old_busy == capacity); // Full means all slots busy
+            const slot_index = self.busy.first_unset(self.active_slots) orelse {
+                assert(old_busy == self.active_slots); // Active region fully busy
                 return null;
             };
-
-            // Check if slot_index is within capacity bounds
-            // (BitSet tracks 64 bits, but pool may have fewer slots)
-            if (slot_index >= capacity) {
-                // Pool exhausted - all capacity slots are busy
-                assert(old_busy == capacity); // Full means all slots busy
-                return null;
-            }
 
             assert(slot_index < capacity); // Index must be in bounds
             self.busy.set(slot_index);
@@ -201,6 +195,7 @@ pub fn IOPSType(comptime T: type, comptime capacity: u8) type {
 
             const slot_index = self.index(item);
             assert(slot_index < capacity); // Index must be in bounds
+            assert(slot_index < self.active_slots); // Must be within active region
             assert(self.busy.is_set(@intCast(slot_index))); // Slot must be busy
 
             self.busy.unset(@intCast(slot_index));
@@ -247,7 +242,24 @@ pub fn IOPSType(comptime T: type, comptime capacity: u8) type {
         pub fn busy_count(self: *const IOPS) u7 {
             const result = self.busy.count();
             assert(result <= capacity);
+            assert(result <= self.active_slots);
             return result;
+        }
+
+        pub fn capacity_total(self: *const IOPS) usize {
+            _ = self;
+            return capacity;
+        }
+
+        pub fn activeCapacity(self: *const IOPS) usize {
+            return self.active_slots;
+        }
+
+        pub fn configureActiveSlots(self: *IOPS, new_active: u7) void {
+            assert(new_active > 0);
+            assert(new_active <= capacity);
+            assert(self.busy_count() <= new_active);
+            self.active_slots = new_active;
         }
 
         /// Get number of free slots
@@ -258,9 +270,9 @@ pub fn IOPSType(comptime T: type, comptime capacity: u8) type {
         ///   - Does not modify state
         pub fn free_count(self: *const IOPS) u8 {
             const busy_cnt = self.busy_count();
-            assert(busy_cnt <= capacity); // Sanity check
-            const free_cnt = capacity - busy_cnt;
-            assert(free_cnt + busy_cnt == capacity); // Must sum to capacity
+            assert(busy_cnt <= self.active_slots); // Sanity check
+            const free_cnt = self.active_slots - busy_cnt;
+            assert(free_cnt + busy_cnt == self.active_slots); // Must sum to active slots
             return free_cnt;
         }
 
@@ -271,7 +283,7 @@ pub fn IOPSType(comptime T: type, comptime capacity: u8) type {
         ///   - Does not modify state
         pub fn is_full(self: *const IOPS) bool {
             const result = self.free_count() == 0;
-            assert(result == (self.busy_count() == capacity)); // Consistent definition
+            assert(result == (self.busy_count() == self.active_slots)); // Consistent definition
             return result;
         }
 
@@ -282,7 +294,7 @@ pub fn IOPSType(comptime T: type, comptime capacity: u8) type {
         ///   - Does not modify state
         pub fn is_empty(self: *const IOPS) bool {
             const result = self.busy_count() == 0;
-            assert(result == (self.free_count() == capacity)); // Consistent definition
+            assert(result == (self.free_count() == self.active_slots)); // Consistent definition
             return result;
         }
     };
@@ -324,23 +336,34 @@ test "BitSet: first_unset finds correct index" {
     var bs: BitSet = .{};
 
     // Initially should return 0
-    try std.testing.expectEqual(@as(?u6, 0), bs.first_unset());
+    try std.testing.expectEqual(@as(?u6, 0), bs.first_unset(64));
 
     // Set bit 0, should return 1
     bs.set(0);
-    try std.testing.expectEqual(@as(?u6, 1), bs.first_unset());
+    try std.testing.expectEqual(@as(?u6, 1), bs.first_unset(64));
 
     // Set bit 1, should return 2
     bs.set(1);
-    try std.testing.expectEqual(@as(?u6, 2), bs.first_unset());
+    try std.testing.expectEqual(@as(?u6, 2), bs.first_unset(64));
 
     // Set all bits except 5, should return 5
     bs.bits = std.math.maxInt(u64) & ~(@as(u64, 1) << 5);
-    try std.testing.expectEqual(@as(?u6, 5), bs.first_unset());
+    try std.testing.expectEqual(@as(?u6, 5), bs.first_unset(64));
 
     // Set all bits, should return null
     bs.bits = std.math.maxInt(u64);
-    try std.testing.expectEqual(@as(?u6, null), bs.first_unset());
+    try std.testing.expectEqual(@as(?u6, null), bs.first_unset(64));
+}
+
+test "BitSet: first_unset respects active limit" {
+    var bs: BitSet = .{};
+    // Leave bit 0 free, fill others
+    bs.bits = std.math.maxInt(u64) & ~(@as(u64, 1) << 0);
+    try std.testing.expectEqual(@as(?u6, 0), bs.first_unset(64));
+
+    // Limit to 0 active bits should be invalid (handled by assert), so use 8 and block first slot
+    bs.set(0);
+    try std.testing.expectEqual(@as(?u6, null), bs.first_unset(1));
 }
 
 test "IOPSType: acquire and release" {
@@ -412,4 +435,26 @@ test "IOPSType: pointer arithmetic index calculation" {
     }
 
     try std.testing.expect(pool.is_empty());
+}
+
+test "IOPSType: active slot configuration" {
+    const TestStruct = struct { value: u32 };
+    var pool: IOPSType(TestStruct, 8) = .{};
+
+    pool.configureActiveSlots(4);
+    try std.testing.expectEqual(@as(usize, 4), pool.activeCapacity());
+
+    // Acquire up to active limit
+    var ptrs: [4]*TestStruct = undefined;
+    for (&ptrs, 0..) |*slot, i| {
+        slot.* = pool.acquire().?;
+        slot.*.value = @intCast(i);
+    }
+
+    // Further acquire should fail because active region full
+    try std.testing.expect(pool.acquire() == null);
+
+    // Releasing one frees capacity
+    pool.release(ptrs[0]);
+    try std.testing.expect(pool.acquire() != null);
 }

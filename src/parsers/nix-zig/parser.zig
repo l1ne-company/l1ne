@@ -9,6 +9,31 @@ const CST = ast.CST;
 const Tokenizer = tokenizer.Tokenizer;
 const Token = tokenizer.Token;
 
+pub const Span = struct {
+    start: usize,
+    end: usize,
+};
+
+pub const DiagnosticKind = enum {
+    unexpected_token,
+    postfix_limit,
+    internal,
+};
+
+pub const Diagnostic = struct {
+    kind: DiagnosticKind = .internal,
+    span: Span = .{ .start = 0, .end = 0 },
+    got_token: ?TokenKind = null,
+    expected_token: ?TokenKind = null,
+    limit: usize = 0,
+    note_len: usize = 0,
+    note_buf: [128]u8 = undefined,
+
+    pub fn note(self: *const Diagnostic) []const u8 {
+        return self.note_buf[0..self.note_len];
+    }
+};
+
 /// Operator precedence levels (lower number = lower precedence)
 const Precedence = enum(u8) {
     LOWEST = 0,
@@ -73,8 +98,9 @@ pub const Parser = struct {
     allocator: std.mem.Allocator,
     source: []const u8,
     current_token: Token,
+    diagnostics: ?*Diagnostic,
 
-    pub fn init(allocator: std.mem.Allocator, source: []const u8) !Parser {
+    pub fn init(allocator: std.mem.Allocator, source: []const u8, diagnostics: ?*Diagnostic) !Parser {
         var tok = try Tokenizer.init(allocator, source);
         const first_token = try tok.next();
         return .{
@@ -82,6 +108,7 @@ pub const Parser = struct {
             .allocator = allocator,
             .source = source,
             .current_token = first_token,
+            .diagnostics = diagnostics,
         };
     }
 
@@ -117,6 +144,7 @@ pub const Parser = struct {
 
     fn expect(self: *Parser, kind: TokenKind) !*Node {
         if (self.current_token.kind != kind) {
+            self.recordUnexpectedToken(kind, "mismatched token");
             return error.UnexpectedToken;
         }
         return try self.consumeToken();
@@ -152,6 +180,7 @@ pub const Parser = struct {
     }
 
     pub fn parse(self: *Parser) !CST {
+        self.resetDiagnostics();
         const root = try self.makeNode(.NODE_ROOT, 0);
         errdefer root.deinit();
 
@@ -324,10 +353,52 @@ pub const Parser = struct {
         return left;
     }
 
+    fn resetDiagnostics(self: *Parser) void {
+        if (self.diagnostics) |diag| diag.* = .{};
+    }
+
+    fn storeNote(diag: *Diagnostic, note: []const u8) void {
+        const len = @min(note.len, diag.note_buf.len);
+        std.mem.copyForwards(u8, diag.note_buf[0..len], note[0..len]);
+        diag.note_len = len;
+    }
+
+    fn recordUnexpectedToken(self: *Parser, expected: TokenKind, note: []const u8) void {
+        if (self.diagnostics) |diag| {
+            diag.* = .{
+                .kind = .unexpected_token,
+                .span = .{ .start = self.current_token.start, .end = self.current_token.end },
+                .got_token = self.current_token.kind,
+                .expected_token = expected,
+            };
+            storeNote(diag, note);
+        }
+    }
+
+    fn recordPostfixLimit(self: *Parser, limit: usize) void {
+        if (self.diagnostics) |diag| {
+            diag.* = .{
+                .kind = .postfix_limit,
+                .span = .{ .start = self.current_token.start, .end = self.current_token.end },
+                .limit = limit,
+            };
+        }
+    }
+
+    fn recordInternal(self: *Parser, note: []const u8) void {
+        if (self.diagnostics) |diag| {
+            diag.* = .{
+                .kind = .internal,
+                .span = .{ .start = self.current_token.start, .end = self.current_token.end },
+            };
+            storeNote(diag, note);
+        }
+    }
+
     fn bumpPostfixCount(self: *Parser, counter: *usize, limit: usize) ParseError!void {
-        _ = self;
         counter.* += 1;
         if (counter.* > limit) {
+            self.recordPostfixLimit(limit);
             return error.PostfixLimitExceeded;
         }
     }
@@ -642,6 +713,8 @@ pub const Parser = struct {
                     return node;
                 },
                 else => {
+                    self.recordUnexpectedToken(.TOKEN_STRING_END, "unterminated string literal");
+
                     const error_node = try self.makeNode(.NODE_ERROR, self.current_token.start);
                     errdefer error_node.deinit();
 
