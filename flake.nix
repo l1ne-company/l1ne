@@ -41,15 +41,6 @@
         packages = [
           zigFromTarball
         ];
-
-        shellHook = ''
-          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            echo "syncing one-for-all submodule to latest remote commit..."
-            git submodule update --init --recursive --remote libs/one-for-all || {
-              echo "warning: failed to refresh submodule; continuing with existing checkout"
-            }
-          fi
-        '';
       };
     };
 }

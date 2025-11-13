@@ -3,5 +3,6 @@ zig-out/
 *.o
 
 .direnv/
+.envrc
 *result
 benchmark_results.json

@@ -214,11 +214,86 @@ pub const Parser = struct {
         return CST.init(self.allocator, self.source, root);
     }
 
+    /// Check if token can start a function application
+    fn canApplyFunction(token: TokenKind) bool {
+        return switch (token) {
+            .TOKEN_IDENT,
+            .TOKEN_OR,
+            .TOKEN_INTEGER,
+            .TOKEN_FLOAT,
+            .TOKEN_STRING_START,
+            .TOKEN_URI,
+            .TOKEN_PATH,
+            .TOKEN_L_BRACE,
+            .TOKEN_L_BRACK,
+            .TOKEN_L_PAREN,
+            .TOKEN_IF,
+            .TOKEN_LET,
+            .TOKEN_WITH,
+            .TOKEN_ASSERT,
+            .TOKEN_REC,
+            .TOKEN_SUB,
+            .TOKEN_INVERT,
+            => true,
+            else => false,
+        };
+    }
+
+    /// Try to parse postfix operator with whitespace lookahead
+    fn tryParsePostfixWithWhitespace(
+        self: *Parser,
+        left: *Node,
+        min_prec: Precedence,
+        postfix_count: *usize,
+        postfix_limit: usize,
+    ) ParseError!?*Node {
+        if (self.peek() != .TOKEN_WHITESPACE) return null;
+
+        const saved_state = self.tokenizer.saveState();
+        const saved_token = self.current_token;
+        try self.skipWs();
+        const next_token = self.peek();
+        self.tokenizer.restoreState(saved_state);
+        self.current_token = saved_token;
+
+        // Check for infix operator after whitespace
+        if (getInfixPrecedence(next_token)) |op_prec| {
+            if (@intFromEnum(op_prec) <= @intFromEnum(min_prec)) return null;
+            const result = try self.parseBinaryOp(left, op_prec);
+            try self.bumpPostfixCount(postfix_count, postfix_limit);
+            return result;
+        }
+
+        // Check for has-attr (?) after whitespace
+        if (next_token == .TOKEN_QUESTION) {
+            if (@intFromEnum(Precedence.HAS_ATTR) <= @intFromEnum(min_prec)) return null;
+            const result = try self.parseHasAttr(left);
+            try self.bumpPostfixCount(postfix_count, postfix_limit);
+            return result;
+        }
+
+        // Check for select (.) after whitespace
+        if (next_token == .TOKEN_DOT) {
+            if (@intFromEnum(Precedence.SELECT) <= @intFromEnum(min_prec)) return null;
+            const result = try self.parseSelect(left);
+            try self.bumpPostfixCount(postfix_count, postfix_limit);
+            return result;
+        }
+
+        // Check for function application after whitespace
+        if (canApplyFunction(next_token) and @intFromEnum(Precedence.CALL) > @intFromEnum(min_prec)) {
+            const result = try self.parseFunctionApplication(left);
+            try self.bumpPostfixCount(postfix_count, postfix_limit);
+            return result;
+        }
+
+        return null;
+    }
+
     /// Parse expression with Pratt parsing
     fn parseExpression(self: *Parser, min_prec: Precedence) ParseError!*Node {
         try self.skipWs();
 
-        // Parse prefix/primary
         var left = try self.parsePrefix();
         const postfix_limit = @max(self.source.len, 1);
         var postfix_count: usize = 0;
@@ -227,70 +302,11 @@ pub const Parser = struct {
             return lambda_node;
         }
 
-        // Parse infix operators
         while (true) {
-            // Skip whitespace first to see what's next
-            if (self.peek() == .TOKEN_WHITESPACE) {
-                const saved_state = self.tokenizer.saveState();
-                const saved_token = self.current_token;
-                try self.skipWs();
-                const next_token = self.peek();
-                self.tokenizer.restoreState(saved_state);
-                self.current_token = saved_token;
-
-                // Check if next token (after whitespace) is an infix operator
-                if (getInfixPrecedence(next_token)) |op_prec| {
-                    if (@intFromEnum(op_prec) <= @intFromEnum(min_prec)) break;
-                    // Don't skip whitespace - parseBinaryOp will consume it
-                    left = try self.parseBinaryOp(left, op_prec);
-                    try self.bumpPostfixCount(&postfix_count, postfix_limit);
-                    continue;
-                }
-
-                // Check for has-attr (? operator) after whitespace
-                if (next_token == .TOKEN_QUESTION) {
-                    if (@intFromEnum(Precedence.HAS_ATTR) <= @intFromEnum(min_prec)) break;
-                    left = try self.parseHasAttr(left);
-                    try self.bumpPostfixCount(&postfix_count, postfix_limit);
-                    continue;
-                }
-
-                // Check for select (. operator) after whitespace
-                if (next_token == .TOKEN_DOT) {
-                    if (@intFromEnum(Precedence.SELECT) <= @intFromEnum(min_prec)) break;
-                    left = try self.parseSelect(left);
-                    try self.bumpPostfixCount(&postfix_count, postfix_limit);
-                    continue;
-                }
-
-                // Check for function application
-                const can_apply = switch (next_token) {
-                    .TOKEN_IDENT,
-                    .TOKEN_OR,
-                    .TOKEN_INTEGER,
-                    .TOKEN_FLOAT,
-                    .TOKEN_STRING_START,
-                    .TOKEN_URI,
-                    .TOKEN_PATH,
-                    .TOKEN_L_BRACE,
-                    .TOKEN_L_BRACK,
-                    .TOKEN_L_PAREN,
-                    .TOKEN_IF,
-                    .TOKEN_LET,
-                    .TOKEN_WITH,
-                    .TOKEN_ASSERT,
-                    .TOKEN_REC,
-                    .TOKEN_SUB,
-                    .TOKEN_INVERT,
-                    => true,
-                    else => false,
-                };
-
-                if (can_apply and @intFromEnum(Precedence.CALL) > @intFromEnum(min_prec)) {
-                    left = try self.parseFunctionApplication(left);
-                    try self.bumpPostfixCount(&postfix_count, postfix_limit);
-                    continue;
-                }
+            // Try parsing postfix with whitespace lookahead
+            if (try self.tryParsePostfixWithWhitespace(left, min_prec, &postfix_count, postfix_limit)) |new_left| {
+                left = new_left;
+                continue;
             }
 
             // Check for infix binary operators (no whitespace)
@@ -301,7 +317,7 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Check for has-attr (? operator)
+            // Check for has-attr (?)
             if (self.peek() == .TOKEN_QUESTION) {
                 if (@intFromEnum(Precedence.HAS_ATTR) <= @intFromEnum(min_prec)) break;
                 left = try self.parseHasAttr(left);
@@ -309,7 +325,7 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Check for select (. operator)
+            // Check for select (.)
             if (self.peek() == .TOKEN_DOT) {
                 if (@intFromEnum(Precedence.SELECT) <= @intFromEnum(min_prec)) break;
                 left = try self.parseSelect(left);
@@ -318,35 +334,12 @@ pub const Parser = struct {
             }
 
             // Check for function application (no whitespace)
-            const can_apply_direct = switch (self.peek()) {
-                .TOKEN_IDENT,
-                .TOKEN_OR,
-                .TOKEN_INTEGER,
-                .TOKEN_FLOAT,
-                .TOKEN_STRING_START,
-                .TOKEN_URI,
-                .TOKEN_PATH,
-                .TOKEN_L_BRACE,
-                .TOKEN_L_BRACK,
-                .TOKEN_L_PAREN,
-                .TOKEN_IF,
-                .TOKEN_LET,
-                .TOKEN_WITH,
-                .TOKEN_ASSERT,
-                .TOKEN_REC,
-                .TOKEN_SUB,
-                .TOKEN_INVERT,
-                => true,
-                else => false,
-            };
-
-            if (can_apply_direct and @intFromEnum(Precedence.CALL) > @intFromEnum(min_prec)) {
+            if (canApplyFunction(self.peek()) and @intFromEnum(Precedence.CALL) > @intFromEnum(min_prec)) {
                 left = try self.parseFunctionApplication(left);
                 try self.bumpPostfixCount(&postfix_count, postfix_limit);
                 continue;
             }
 
-            // No more operators
             break;
         }
 
@@ -822,35 +815,13 @@ pub const Parser = struct {
         return node;
     }
 
-    fn parseSelect(self: *Parser, left: *Node) ParseError!*Node {
-        const start = left.start;
-        const node = try self.makeNode(.NODE_SELECT, start);
-        errdefer node.deinit();
-
-        try node.addChild(left);
-        try self.consumeWs(node);
-
-        const dot = try self.expect(.TOKEN_DOT);
-        try node.addChild(dot);
-
-        // Parse attribute path - may have multiple parts like b.c.d
-        const attrpath_start = self.current_token.start;
-        const attrpath = try self.makeNode(.NODE_ATTRPATH, attrpath_start);
-        errdefer attrpath.deinit();
-
-        var last_end: usize = dot.end;
-
-        // Parse first attribute
+    /// Parse a single attribute in a select path (ident, string, or dynamic)
+    fn parseSelectAttribute(self: *Parser) ParseError!?*Node {
         if (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR) {
-            const attr = try self.parseIdent();
-            try attrpath.addChild(attr);
-            last_end = attr.end;
+            return try self.parseIdent();
         } else if (self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_L_BRACE) {
-            const attr = try self.parsePrefix();
-            try attrpath.addChild(attr);
-            last_end = attr.end;
+            return try self.parsePrefix();
         } else if (self.peek() == .TOKEN_INTERPOL_START) {
-            // Dynamic attribute ${expr}
             const dyn_node = try self.makeNode(.NODE_DYNAMIC, self.current_token.start);
             errdefer dyn_node.deinit();
 
@@ -864,45 +835,73 @@ pub const Parser = struct {
             try dyn_node.addChild(interp_end);
 
             finishNode(dyn_node, interp_end.end);
-            try attrpath.addChild(dyn_node);
-            last_end = dyn_node.end;
+            return dyn_node;
+        }
+        return null;
+    }
+
+    /// Try to parse 'or' default value for select expression
+    fn tryParseSelectOrDefault(self: *Parser, node: *Node) ParseError!void {
+        if (self.peek() != .TOKEN_WHITESPACE) return;
+
+        const saved_state = self.tokenizer.saveState();
+        const saved_token = self.current_token;
+        try self.skipWs();
+
+        if (self.peek() == .TOKEN_OR) {
+            self.tokenizer.restoreState(saved_state);
+            self.current_token = saved_token;
+            try self.consumeWs(node);
+
+            const or_tok = try self.consumeToken();
+            try node.addChild(or_tok);
+            try self.consumeWs(node);
+
+            const default = try self.parseExpression(.SELECT);
+            try node.addChild(default);
+            finishNode(node, default.end);
+        } else {
+            self.tokenizer.restoreState(saved_state);
+            self.current_token = saved_token;
+        }
+    }
+
+    fn parseSelect(self: *Parser, left: *Node) ParseError!*Node {
+        const start = left.start;
+        const node = try self.makeNode(.NODE_SELECT, start);
+        errdefer node.deinit();
+
+        try node.addChild(left);
+        try self.consumeWs(node);
+
+        const dot = try self.expect(.TOKEN_DOT);
+        try node.addChild(dot);
+
+        const attrpath_start = self.current_token.start;
+        const attrpath = try self.makeNode(.NODE_ATTRPATH, attrpath_start);
+        errdefer attrpath.deinit();
+
+        var last_end: usize = dot.end;
+
+        // Parse first attribute
+        if (try self.parseSelectAttribute()) |attr| {
+            try attrpath.addChild(attr);
+            last_end = attr.end;
         } else {
             attrpath.deinit();
             finishNode(node, dot.end);
             return node;
         }
 
-        // Continue parsing additional .attr parts
+        // Parse additional .attr parts
         while (self.peek() == .TOKEN_DOT) {
             const next_dot = try self.consumeToken();
             try attrpath.addChild(next_dot);
             last_end = next_dot.end;
 
-            if (self.peek() == .TOKEN_IDENT or self.peek() == .TOKEN_OR) {
-                const attr = try self.parseIdent();
+            if (try self.parseSelectAttribute()) |attr| {
                 try attrpath.addChild(attr);
                 last_end = attr.end;
-            } else if (self.peek() == .TOKEN_STRING_START or self.peek() == .TOKEN_L_BRACE) {
-                const attr = try self.parsePrefix();
-                try attrpath.addChild(attr);
-                last_end = attr.end;
-            } else if (self.peek() == .TOKEN_INTERPOL_START) {
-                // Dynamic attribute ${expr}
-                const dyn_node = try self.makeNode(.NODE_DYNAMIC, self.current_token.start);
-                errdefer dyn_node.deinit();
-
-                const interp_start = try self.expect(.TOKEN_INTERPOL_START);
-                try dyn_node.addChild(interp_start);
-
-                const expr = try self.parseExpression(.LOWEST);
-                try dyn_node.addChild(expr);
-
-                const interp_end = try self.expect(.TOKEN_INTERPOL_END);
-                try dyn_node.addChild(interp_end);
-
-                finishNode(dyn_node, interp_end.end);
-                try attrpath.addChild(dyn_node);
-                last_end = dyn_node.end;
             } else {
                 break;
             }
@@ -912,28 +911,7 @@ pub const Parser = struct {
         try node.addChild(attrpath);
         finishNode(node, last_end);
 
-        // Check for 'or' default
-        if (self.peek() == .TOKEN_WHITESPACE) {
-            const saved_state = self.tokenizer.saveState();
-            const saved_token = self.current_token;
-            try self.skipWs();
-            if (self.peek() == .TOKEN_OR) {
-                // Restore and properly consume whitespace as a token
-                self.tokenizer.restoreState(saved_state);
-                self.current_token = saved_token;
-                try self.consumeWs(node);
-
-                const or_tok = try self.consumeToken();
-                try node.addChild(or_tok);
-                try self.consumeWs(node);
-                const default = try self.parseExpression(.SELECT);
-                try node.addChild(default);
-                finishNode(node, default.end);
-            } else {
-                self.tokenizer.restoreState(saved_state);
-                self.current_token = saved_token;
-            }
-        }
+        try self.tryParseSelectOrDefault(node);
 
         return node;
     }
@@ -1303,12 +1281,84 @@ pub const Parser = struct {
         return node;
     }
 
+    /// Parse legacy let syntax: let { bindings }
+    fn parseLegacyLet(self: *Parser, start: usize, let_tok: *Node, ws_tokens: std.ArrayList(*Node)) ParseError!*Node {
+        const node = try self.makeNode(.NODE_LEGACY_LET, start);
+        errdefer node.deinit();
+
+        try node.addChild(let_tok);
+        for (ws_tokens.items) |ws| {
+            try node.addChild(ws);
+        }
+
+        const lbrace = try self.expect(.TOKEN_L_BRACE);
+        try node.addChild(lbrace);
+
+        while (true) {
+            try self.consumeWs(node);
+            if (self.peek() == .TOKEN_R_BRACE or self.peek() == .TOKEN_EOF) break;
+
+            if (self.peek() == .TOKEN_INHERIT) {
+                const inherit_node = try self.parseInherit();
+                try node.addChild(inherit_node);
+            } else {
+                const binding = try self.parseAttrPathValue();
+                try node.addChild(binding);
+            }
+        }
+
+        try self.consumeWs(node);
+        if (self.peek() == .TOKEN_R_BRACE) {
+            const rbrace = try self.consumeToken();
+            try node.addChild(rbrace);
+            finishNode(node, rbrace.end);
+        } else {
+            finishNode(node, self.current_token.start);
+        }
+
+        return node;
+    }
+
+    /// Parse modern let-in syntax: let bindings in expr
+    fn parseModernLetIn(self: *Parser, start: usize, let_tok: *Node, ws_tokens: std.ArrayList(*Node)) ParseError!*Node {
+        const node = try self.makeNode(.NODE_LET_IN, start);
+        errdefer node.deinit();
+
+        try node.addChild(let_tok);
+        for (ws_tokens.items) |ws| {
+            try node.addChild(ws);
+        }
+
+        while (true) {
+            try self.consumeWs(node);
+            if (self.peek() == .TOKEN_IN or self.peek() == .TOKEN_EOF) break;
+
+            if (self.peek() == .TOKEN_INHERIT) {
+                const inherit_node = try self.parseInherit();
+                try node.addChild(inherit_node);
+            } else {
+                const binding = try self.parseAttrPathValue();
+                try node.addChild(binding);
+            }
+        }
+
+        if (self.peek() == .TOKEN_IN) {
+            const in_tok = try self.consumeToken();
+            try node.addChild(in_tok);
+        }
+        try self.consumeWs(node);
+
+        const body = try self.parseExpression(.LOWEST);
+        try node.addChild(body);
+
+        finishNode(node, body.end);
+        return node;
+    }
+
     fn parseLetIn(self: *Parser) ParseError!*Node {
         const start = self.current_token.start;
-
         const let_tok = try self.expect(.TOKEN_LET);
 
-        // Consume whitespace tokens to peek ahead
         var ws_tokens = std.ArrayList(*Node){};
         defer ws_tokens.deinit(self.allocator);
         while (self.peek() == .TOKEN_WHITESPACE or self.peek() == .TOKEN_COMMENT) {
@@ -1316,79 +1366,11 @@ pub const Parser = struct {
             try ws_tokens.append(self.allocator, ws);
         }
 
-        // Check if this is legacy let syntax
         const is_legacy = self.peek() == .TOKEN_L_BRACE;
-
         if (is_legacy) {
-            // Parse as legacy let: let { bindings }
-            const node = try self.makeNode(.NODE_LEGACY_LET, start);
-            errdefer node.deinit();
-
-            try node.addChild(let_tok);
-            for (ws_tokens.items) |ws| {
-                try node.addChild(ws);
-            }
-
-            const lbrace = try self.expect(.TOKEN_L_BRACE);
-            try node.addChild(lbrace);
-
-            while (true) {
-                try self.consumeWs(node);
-                if (self.peek() == .TOKEN_R_BRACE or self.peek() == .TOKEN_EOF) break;
-
-                if (self.peek() == .TOKEN_INHERIT) {
-                    const inherit_node = try self.parseInherit();
-                    try node.addChild(inherit_node);
-                } else {
-                    const binding = try self.parseAttrPathValue();
-                    try node.addChild(binding);
-                }
-            }
-
-            try self.consumeWs(node);
-            if (self.peek() == .TOKEN_R_BRACE) {
-                const rbrace = try self.consumeToken();
-                try node.addChild(rbrace);
-                finishNode(node, rbrace.end);
-            } else {
-                finishNode(node, self.current_token.start);
-            }
-
-            return node;
+            return try self.parseLegacyLet(start, let_tok, ws_tokens);
         } else {
-            // Parse as normal let-in: let bindings in expr
-            const node = try self.makeNode(.NODE_LET_IN, start);
-            errdefer node.deinit();
-
-            try node.addChild(let_tok);
-            for (ws_tokens.items) |ws| {
-                try node.addChild(ws);
-            }
-
-            while (true) {
-                try self.consumeWs(node);
-                if (self.peek() == .TOKEN_IN or self.peek() == .TOKEN_EOF) break;
-
-                if (self.peek() == .TOKEN_INHERIT) {
-                    const inherit_node = try self.parseInherit();
-                    try node.addChild(inherit_node);
-                } else {
-                    const binding = try self.parseAttrPathValue();
-                    try node.addChild(binding);
-                }
-            }
-
-            if (self.peek() == .TOKEN_IN) {
-                const in_tok = try self.consumeToken();
-                try node.addChild(in_tok);
-            }
-            try self.consumeWs(node);
-
-            const body = try self.parseExpression(.LOWEST);
-            try node.addChild(body);
-
-            finishNode(node, body.end);
-            return node;
+            return try self.parseModernLetIn(start, let_tok, ws_tokens);
         }
     }
 
@@ -1515,6 +1497,29 @@ pub const Parser = struct {
         return node;
     }
 
+    /// Parse inherit source: (expr)
+    fn parseInheritFrom(self: *Parser) ParseError!*Node {
+        const from_start = self.current_token.start;
+        const from_node = try self.makeNode(.NODE_INHERIT_FROM, from_start);
+        errdefer from_node.deinit();
+
+        const lparen = try self.consumeToken();
+        try from_node.addChild(lparen);
+        try self.consumeWs(from_node);
+
+        const source = try self.parseExpression(.LOWEST);
+        try from_node.addChild(source);
+        try self.consumeWs(from_node);
+
+        if (self.peek() == .TOKEN_R_PAREN) {
+            const rparen = try self.consumeToken();
+            try from_node.addChild(rparen);
+        }
+
+        finishNode(from_node, self.current_token.start);
+        return from_node;
+    }
+
     fn parseInherit(self: *Parser) ParseError!*Node {
         const start = self.current_token.start;
         const node = try self.makeNode(.NODE_INHERIT, start);
@@ -1524,26 +1529,8 @@ pub const Parser = struct {
         try node.addChild(inherit_tok);
         try self.consumeWs(node);
 
-        // Check for (source)
         if (self.peek() == .TOKEN_L_PAREN) {
-            const from_start = self.current_token.start;
-            const from_node = try self.makeNode(.NODE_INHERIT_FROM, from_start);
-            errdefer from_node.deinit();
-
-            const lparen = try self.consumeToken();
-            try from_node.addChild(lparen);
-            try self.consumeWs(from_node);
-
-            const source = try self.parseExpression(.LOWEST);
-            try from_node.addChild(source);
-            try self.consumeWs(from_node);
-
-            if (self.peek() == .TOKEN_R_PAREN) {
-                const rparen = try self.consumeToken();
-                try from_node.addChild(rparen);
-            }
-
-            finishNode(from_node, self.current_token.start);
+            const from_node = try self.parseInheritFrom();
             try node.addChild(from_node);
             try self.consumeWs(node);
         }
@@ -1557,7 +1544,6 @@ pub const Parser = struct {
                 const str = try self.parseString();
                 try node.addChild(str);
             } else if (self.peek() == .TOKEN_INTERPOL_START) {
-                // Dynamic attribute ${expr}
                 const dyn_node = try self.makeNode(.NODE_DYNAMIC, self.current_token.start);
                 errdefer dyn_node.deinit();
 
