@@ -165,3 +165,6 @@ Test files for the Nix parser follow this structure:
 - `test_data/tokenizer/success/` - tokenizer test cases with `.nix` input and `.expect` output
 
 The test runner (`test_runner.zig`) automatically discovers and runs all test cases, reporting statistics.
+
+## MASTER RULE
+YOU DONT HAVE PERMISSION TO CHANGE ONE LINE OF CODE INSIDE OF l1ne dir READ-ACCESS ONLY
