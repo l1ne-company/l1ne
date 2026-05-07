@@ -6,3 +6,8 @@ zig-out/
 .envrc
 *result
 benchmark_results.json
+
+
+# Added by cargo
+
+/target
