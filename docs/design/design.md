@@ -114,7 +114,7 @@ sequenceDiagram
         W->>Brk: request effect (Http / Storage / GPU / etc.)
         Brk-->>W: allowed within quota, or denied
     end
-    W->>CP: result is content-addressed; register location + lineage
+    W->>CP: result is content-addressed, register location + lineage
     CP-->>Dev: Future resolves, value returned
 ```
 
