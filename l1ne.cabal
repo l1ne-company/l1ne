@@ -15,5 +15,5 @@ executable l1ne
     main-is:          Main.hs
     other-modules:    Cli
     hs-source-dirs:   src/l1ne
-    build-depends:    base ^>=4.18.3.0
+    build-depends:    base >=4.18 && <5
     default-language: GHC2021
