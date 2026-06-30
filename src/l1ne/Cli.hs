@@ -7,8 +7,6 @@ module Cli
   )
 where
 
-import System.Exit (exitSuccess)
-
 data Command
   = Compile FilePath -- Compile a source file
   | Help -- Show help
@@ -29,16 +27,13 @@ parseArgs args = Left $ "Expected a single source file, got: " ++ unwords args
 showHelp :: String
 showHelp =
   unlines
-    [ "l1ne - A content-addressed, effect-typed language",
+    [ "",
+      "l1ne - the 67 language",
       "",
       "Usage:",
       "  l1ne <file>       Compile a l1ne source file",
       "  l1ne --help       Show this help",
-      "  l1ne --version    Show version",
-      "",
-      "Examples:",
-      "  l1ne program.l1",
-      "  l1ne main.l1ne"
+      "  l1ne --version    Show version"
     ]
 
 showVersion :: String
@@ -46,8 +41,8 @@ showVersion = "l1ne version 0.1.0"
 
 dispatch :: Command -> IO ()
 dispatch = \case
-  Help -> putStrLn showHelp >> exitSuccess
-  Version -> putStrLn showVersion >> exitSuccess
+  Help -> putStrLn showHelp
+  Version -> putStrLn showVersion
   Compile path -> compile path
 
 compile :: FilePath -> IO ()
