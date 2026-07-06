@@ -10,3 +10,4 @@ cabal.project.local~
 
 # Installed binary
 /l1ne
+docs/ideas.md
