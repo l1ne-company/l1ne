@@ -8,7 +8,7 @@
 | **Version** | 0.1 — Draft |
 | **Status** | Design and vision. Not yet implemented. |
 | **What this is** | The design ideas behind l1ne, written to drive a POC and a deeper design process. |
-| **Syntax** | [l1ne syntax 0.1](syntax-v0.md) — concrete `.ln` lexer and parser contract. |
+| **Syntax** | [l1ne syntax 0.1](syntax-v0.md) — concise surface-language contract. |
 
 ---
 

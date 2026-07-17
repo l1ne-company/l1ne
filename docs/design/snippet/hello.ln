@@ -1,0 +1,7 @@
+module examples.hello
+
+use std.io.{Console}
+
+pub fn main() -> Unit uses Console {
+    Console.println("hello, world")
+}

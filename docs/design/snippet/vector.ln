@@ -1,0 +1,31 @@
+module examples.vector
+
+use std.io.{Console}
+use std.math.{sqrt}
+use std.text.{show}
+
+type Vec = {
+    x :: Float
+    y :: Float
+}
+
+fn add(a :: Vec, b :: Vec) -> Vec {
+    Vec(x: a.x + b.x, y: a.y + b.y)
+}
+
+fn dot(a :: Vec, b :: Vec) -> Float {
+    a.x * b.x + a.y * b.y
+}
+
+fn norm(v :: Vec) -> Float {
+    ensure result >= 0.0
+    sqrt(dot(v, v))
+}
+
+law dotSymmetric: forall a :: Vec: forall b :: Vec: dot(a, b) == dot(b, a)
+law addCommutes:  forall a :: Vec: forall b :: Vec: add(a, b) == add(b, a)
+
+pub fn main() -> Unit uses Console {
+    let v = Vec(x: 3.0, y: 4.0)
+    Console.println("norm = " + show(norm(v)))
+}

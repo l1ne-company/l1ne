@@ -1,0 +1,24 @@
+module examples.primes
+
+use std.io.{Console}
+use std.text.{show}
+
+fn isPrime(n :: Int) -> Bool {
+    2 <= n and not (exists d in 2..n: n % d == 0)
+}
+
+fn primesBelow(limit :: Int) -> [Int] {
+    require limit >= 0
+    [n : n in 2..limit, isPrime(n)]
+}
+
+law primesAreAtLeastTwo: forall n :: Int: isPrime(n) implies 2 <= n
+
+law uniqueEvenPrime: exists! p in 2..100: isPrime(p) and p % 2 == 0
+
+law goldbachBelow100: forall n in [m : m in 4..=100, m % 2 == 0]:
+    exists p in 2..n: isPrime(p) and isPrime(n - p)
+
+pub fn main() -> Unit uses Console {
+    Console.println("primes below 30: " + show(primesBelow(30)))
+}

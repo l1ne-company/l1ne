@@ -1,34 +1,91 @@
 # l1ne syntax 0.1
 
-Status: draft parser contract  
+Status: draft language contract  
 Source extension: `.ln`  
 Encoding: UTF-8
 
-This document defines the first concrete l1ne surface syntax. It is intentionally small enough for a hand-written lexer and recursive-descent parser. It does not define type inference, evaluation, hashing, bytecode, scheduling, or runtime effect grants.
+This document contains the decisions needed to read and implement l1ne syntax. Type inference, evaluation, hashing, bytecode, scheduling, and runtime capability grants are separate specifications.
 
-## 1. Design direction
+## 1. Core rules
 
-l1ne uses:
+1. Every file declares one `module` first; imports follow it.
+2. Definitions are immutable. `let` binds a value; `=` never mutates one.
+3. Functions are pure unless a `uses` clause declares external effects.
+4. Blocks, `if`, and `match` are expressions. The final expression is the result.
+5. Calls are local by default. `@remote` only makes a function eligible for remote placement.
+6. Generic arguments use `[...]`; function results use `->`.
+7. The surface language has no custom operators, macros, methods, implicit mutation, hidden I/O, or implicit truthiness.
+8. Comments and non-semantic whitespace do not affect a definition's structural hash. Attributes do.
+9. Law bodies, contract clauses, comprehensions, and quantifier predicates are pure. Effects are rejected inside them.
 
-- Go's readable declarations, braces, package-like modules, and automatic semicolons.
-- Haskell's immutable bindings, algebraic data types, pure-by-default functions, and pattern matching.
-- Lean's explicit mathematical structure and preference for unambiguous notation.
-- Rust's `fn`, expression-valued blocks, attributes, exhaustive `match`, and explicit effect-like boundaries.
+## 2. Readable notation and logic
 
-Version 0.1 favors one obvious spelling over shorthand. It has no custom operators, macros, methods, implicit mutation, or hidden I/O.
+### 2.1 Canonical English reading
 
-### Fixed principles
+l1ne code must read aloud as a precise English statement. Every semantic operator or marker has a canonical reading; new syntax is rejected if it has no short, unambiguous reading.
 
-1. A source file is one module and begins with `module`.
-2. Definitions are immutable. Local bindings use `let`; there is no assignment operator.
-3. A function without a `uses` clause is pure.
-4. Outside-world access is named after `uses`: `uses Console and Clock`.
-5. Blocks and conditionals are expressions. Their final unterminated expression is their value.
-6. Generic parameters use square brackets, avoiding the `<` ambiguity found in C-like grammars.
-7. Calls are local by default. `@remote` marks a definition as eligible for remote execution; placement remains runtime policy.
-8. Comments, source spans, and whitespace discarded by the layout pass are not semantic AST nodes and must not affect a definition's structural hash. A newline that inserts a semicolon is syntax and may change the AST. Documentation comments and attributes are retained separately.
+| Syntax | Canonical reading |
+|---|---|
+| `value :: Int` | “value has the type Int” |
+| `name = expression` | “name is defined as expression” |
+| `left == right` | “left equals right” |
+| `fn(x :: A) -> B` | “a function from x of type A returning B” |
+| `uses Console and Clock` | “may use Console and Clock” |
+| `pattern => expression` | “when pattern matches, yield expression” |
+| `Option[A]` | “Option of A” |
+| `not p` | “not p” |
+| `p and q` | “both p and q” |
+| `p or q` | “p or q, or both” |
+| `p implies q` | “if p, then q” |
+| `p iff q` | “p if and only if q” |
+| `forall x in xs: p(x)` | “for every x in xs, p of x holds” |
+| `exists x in xs: p(x)` | “there exists an x in xs for which p of x holds” |
+| `exists! x in xs: p(x)` | “there exists exactly one x in xs for which p of x holds” |
+| `forall n :: Int: p(n)` | “for every n of type Int, p of n holds” |
+| `low <= x < high` | “x is at least low and less than high” |
+| `[f(x) : x in xs, p(x)]` | “the list of every f of x such that x is in xs and p of x holds” |
+| `require p` | “requires that p holds” |
+| `ensure p` | “ensures that the result satisfies p” |
+| `law name: p` | “the law name states that p” |
 
-## 2. A complete example
+`::` is reserved for type statements, annotations, and type-domain binders. A single `:` reads “with” when it names a value — `Point(x: 1.0)` is “Point with x equal to 1.0” — and “such that” when it introduces the body of a quantifier, the clauses of a comprehension, or the statement of a law.
+
+English readability does not replace formal semantics. The parser still produces one exact AST, and the type and effect checkers decide whether that AST is valid.
+
+Mathematical prose admits other phrasings — “q if p”, “p only if q”, “p is sufficient for q” all mean `p implies q` — but l1ne fixes exactly one reading per form and uses it everywhere: this specification, documentation, and diagnostics.
+
+### 2.2 Boolean logic
+
+Logic is classical Boolean logic over `Bool` values. Predicates used by quantifiers must be pure.
+
+| Form | Exact meaning |
+|---|---|
+| `not p` | true exactly when `p` is false |
+| `p and q` | true exactly when both are true |
+| `p or q` | true when at least one is true |
+| `p implies q` | `not p or q`; false only when `p` is true and `q` is false |
+| `p iff q` | both values have the same truth value |
+| `forall x in xs: p(x)` | true when `p(x)` is true for every value in finite `xs` |
+| `exists x in xs: p(x)` | true when `p(x)` is true for at least one value in finite `xs` |
+| `exists! x in xs: p(x)` | true when `p(x)` is true for exactly one value in finite `xs` |
+
+`p and q` does not evaluate `q` when `p` is false; `p or q` does not evaluate `q` when `p` is true; `p implies q` does not evaluate `q` when `p` is false. `iff` always evaluates both sides. For an empty domain, `forall` is true and `exists` is false.
+
+A quantifier takes exactly one binder. Its body extends as far right as possible, so a quantified expression used as an operand must be parenthesized. Binders nest left to right, and their order is significant — `forall x in xs: exists y in ys: p(x, y)` and `exists y in ys: forall x in xs: p(x, y)` are different statements:
+
+```ln
+forall x in xs: exists y in ys: related(x, y)
+```
+
+The standard equivalences are guaranteed, and tooling may rewrite through them: `not (p and q)` equals `not p or not q`, `not (p or q)` equals `not p and not q`, `not (p implies q)` equals `p and not q`, `not (forall x in xs: p(x))` equals `exists x in xs: not p(x)`, and `not (exists x in xs: p(x))` equals `forall x in xs: not p(x)`.
+
+`exists!` is defined by desugaring: `exists! x in xs: p(x)` is exactly `exists x in xs: p(x) and (forall y in xs: p(y) implies y == x)`.
+
+### 2.3 Two quantifier domains
+
+A binder written with `in` ranges over a finite value and evaluates; a binder written with `::` ranges over a type and only states. `forall x in xs: p(x)` is an expression that computes a `Bool`. `forall n :: Int: p(n)` is a proposition about every `Int`; it cannot be computed, so it is legal only inside a `law` declaration (section 4). `in` is extensional, `::` is intensional; the two never mix meanings.
+
+## 3. Complete example
 
 ```ln
 module example.fibonacci
@@ -40,12 +97,12 @@ type FibError =
     | Negative(Int)
 
 type Point = {
-    x: Float
-    y: Float
+    x :: Float
+    y :: Float
 }
 
 @remote
-pub fn fib(n: Int) -> Result[Int, FibError] {
+pub fn fib(n :: Int) -> Result[Int, FibError] {
     if n < 0 {
         Err(Negative(n))
     } else {
@@ -53,12 +110,15 @@ pub fn fib(n: Int) -> Result[Int, FibError] {
     }
 }
 
-fn fibLoop(a: Int, b: Int, remaining: Int) -> Int {
+fn fibLoop(a :: Int, b :: Int, remaining :: Int) -> Int {
+    require remaining >= 0
     match remaining {
         0 => a
         _ => fibLoop(b, a + b, remaining - 1)
     }
 }
+
+law fibMonotone: forall n in 0..19: fibLoop(0, 1, n) <= fibLoop(0, 1, n + 1)
 
 pub fn main() -> Unit uses Console {
     let origin = Point(x: 0.0, y: 0.0)
@@ -71,258 +131,72 @@ pub fn main() -> Unit uses Console {
 }
 ```
 
-The last expression in a block is its result. An explicit semicolon discards that expression's value.
+An explicit `;` discards a final expression's value or separates multiple items on one line.
 
-## 3. Lexical syntax
-
-### 3.1 Source text
-
-- Files use UTF-8.
-- A byte-order mark is rejected.
-- `LF` and `CRLF` are accepted; the lexer normalizes both to one logical newline.
-- Tabs are allowed as whitespace but indentation has no grammar meaning.
-- The lexer tracks byte offset, one-based line, and one-based Unicode-scalar column for every token and error.
-
-### 3.2 Identifiers
-
-Version 0.1 identifiers are deliberately ASCII:
-
-```text
-identifier = [A-Za-z_][A-Za-z0-9_]*
-```
-
-An isolated `_` is the wildcard pattern. Naming conventions are semantic lint, not grammar:
-
-- `lowerCamelCase` for values, functions, fields, and modules.
-- `UpperCamelCase` for types, variants, and effects.
-- `UPPER_SNAKE_CASE` for constants when desired.
-
-Qualified names use dots: `std.io.Console.println`.
-
-### 3.3 Keywords
-
-| Keyword | Meaning |
-|---|---|
-| `module` | Name current module. |
-| `use` | Import module or names. |
-| `as` | Alias an import. |
-| `pub` | Export a declaration. |
-| `fn` | Define a named or anonymous function. |
-| `const` | Define a pure compile-time value. |
-| `type` | Define alias, record, or sum type. |
-| `effect` | Declare an external capability interface. |
-| `uses` | Declare effects a function may request. |
-| `let` | Bind an immutable local value. |
-| `if` | Start a conditional expression. |
-| `else` | Give its alternative expression. |
-| `match` | Select by pattern. |
-| `in` | Bind a quantified variable to a finite domain. |
-| `true`, `false` | Boolean literals. |
-| `not` | Logical negation. |
-| `and` | Boolean conjunction; joins effect names after `uses`. |
-| `or` | Short-circuit Boolean disjunction. |
-| `implies` | One-way condition: `P` guarantees `Q`. |
-| `iff` | Two-way equivalence: “if and only if.” |
-| `forall` | Every value satisfies predicate. |
-| `exists` | At least one value satisfies predicate. |
-
-Keywords cannot be identifiers. Built-in type names such as `Int`, `Bool`, `String`, and `Unit` are ordinary prelude names, not keywords.
-
-### 3.4 Comments
-
-```ln
-// line comment
-
-/* block comment */
-
-/* block comments
-   /* may nest */
-*/
-
-/// documentation for the next declaration
-/** documentation for the next declaration */
-```
-
-Normal comments are discarded. Documentation comments are attached as out-of-band trivia to the source position of the next declaration, then removed from the parser token stream. The parser retrieves that metadata when it builds the declaration. Documentation is excluded from structural hashes.
-
-### 3.5 Number literals
-
-```ln
-0
-1_000_000
-0b1010_0110
-0o755
-0xFF_A0
-3.1415
-1.0e-9
-2e10
-```
-
-Rules:
-
-- `_` may occur only between digits.
-- Base prefixes are lowercase in source, though hexadecimal digits may use either case.
-- Decimal floats require digits on both sides of `.`. Write `1.0`, not `1.`.
-- An exponent may follow a decimal integer or float.
-- Numeric suffixes are not part of 0.1. Types come from context, annotations, or explicit conversion functions.
-- A leading `-` is always a separate unary operator.
-- The lexer uses longest-match tokenization, so `1..3` is `1`, `..`, `3`, not a float.
-
-### 3.6 Character and string literals
-
-```ln
-'a'
-'\n'
-'\u{03BB}'
-
-"escaped string\n"
-`raw string: backslashes and newlines are unchanged`
-```
-
-Escaped literals support `\\`, `\"`, `\'`, `\n`, `\r`, `\t`, `\0`, and `\u{HEX}`. A character literal contains exactly one Unicode scalar after escape decoding. Raw strings cannot contain a backtick. String interpolation is not part of 0.1.
-
-### 3.7 Punctuation and operators
-
-```text
-(  )  {  }  [  ]  ,  :  ;  .  @  |
-=  =>  ->
-+  -  *  /  %  **
-==  !=  <  <=  >  >=
-..  ..=
-```
-
-Boolean logic uses the word operators `not`, `and`, `or`, `implies`, and `iff`. The only operator token beginning with `!` is `!=`.
-
-Unknown punctuation is a lexical error. The lexer always selects the longest valid token.
-
-### 3.8 Automatic semicolons
-
-The lexer converts some physical newlines into synthetic `;` tokens. This keeps ordinary code semicolon-free while giving the parser explicit separators.
-
-A newline becomes `;` when all of these are true:
-
-1. Parenthesis and bracket depth are both zero. Braces do not suppress insertion.
-2. The previous token is an identifier, literal, `true`, `false`, `)`, `]`, or `}`.
-3. The next non-comment token is not `}`, `else`, `|`, `,`, `.`, `)`, or `]`.
-
-End of file behaves like a newline. Repeated separators are allowed between declarations and block items.
-
-Consequences:
-
-```ln
-let x = 1          // semicolon inserted
-let y = x +        // no insertion after an operator
-    2
-
-if ready {         // opening brace stays on the declaration line
-    work()
-} else {           // no insertion before else
-    wait()
-}
-```
-
-Write an explicit `;` to put multiple items on one line or to discard a block's final value. A newline before `{` ends the preceding construct and is therefore invalid for function and effect declarations, `if`, and `match`.
-
-## 4. Modules and imports
-
-Every file starts with exactly one module declaration:
+## 4. Modules and declarations
 
 ```ln
 module geometry.vector
-```
 
-Imports follow it:
-
-```ln
 use std.math
 use std.math as math
 use std.math.{sqrt, sin, cos}
 use std.io.{Console as Terminal}
 ```
 
-- `use std.math` binds the final segment, `math`.
-- `as` gives a module or selected name an alias.
-- A selective import binds only the listed names.
-- Wildcard imports are not part of 0.1.
-- Imports are not textual inclusion and have no runtime side effects.
+Only `pub` top-level declarations are visible from another module. Imports bind names and have no runtime side effects.
 
-Only `pub` top-level declarations are visible to another module.
-
-## 5. Declarations
-
-A module contains `const`, `type`, `effect`, and `fn` declarations. Any may be preceded by attributes and `pub`.
-
-### 5.1 Attributes
+### Constants and bindings
 
 ```ln
-@remote
-@remote(policy = "always")
-@derive(Eq, Show)
-pub fn compute(input: Data) -> Result { computeImpl(input) }
-```
-
-Attribute arguments are identifiers, literals, or `name = literal` pairs. Attributes are retained in the AST. Unknown attributes are accepted by the parser and rejected by a later validation phase.
-
-`@remote` means that a function is eligible for remote placement. It does not turn every call into a network hop.
-
-### 5.2 Constants
-
-```ln
-const maxRetries: Int = 5
+const maxRetries :: Int = 5
 const tau = 6.283185307179586
+
+let count :: Int = 3
+let doubled = count * 2
 ```
 
-A constant initializer must later type-check as a pure compile-time expression. The type annotation is optional.
+A constant is a pure compile-time value. A local `let` may use a pattern. There is no assignment operator.
 
-### 5.3 Functions
+### Functions
 
 ```ln
-fn add(left: Int, right: Int) -> Int {
+fn add(left :: Int, right :: Int) -> Int {
     left + right
 }
 
-fn identity[A](value: A) -> A {
+fn identity[A](value :: A) -> A {
     value
 }
 
-pub fn announce(message: String) -> Unit uses Console and Clock {
+fn announce(message :: String) -> Unit uses Console {
     Console.println(message)
+}
+
+let square = fn(value :: Int) => value * value
+```
+
+Named-function parameters require types. Lambda parameter types may be inferred. Omitting `-> Type` means `-> Unit`. Omitting `uses` means the empty effect set. Top-level recursion is allowed.
+
+### Contracts
+
+```ln
+fn head[A](list :: [A]) -> A {
+    require not isEmpty(list)
+    first(list)
+}
+
+fn sort(list :: [Int]) -> [Int] {
+    ensure isOrdered(result) and isPermutation(result, list)
+    sortBy(compare, list)
 }
 ```
 
-- Parameters always have type annotations in named function declarations.
-- Generic parameters are names inside `[...]`.
-- The default return type is `Unit` when `-> Type` is omitted.
-- No `uses` clause means the empty effect set.
-- Effects are an unordered set semantically; source order is preserved only for diagnostics.
-- Function bodies are expression-valued blocks.
-- Recursive and mutually recursive top-level functions are allowed; name resolution handles them after parsing.
+`require` states the hypothesis a caller must establish; `ensure` states the conclusion the function guarantees, with `result` bound to the returned value. Together they read as a theorem about the function: if the requirements hold, the result satisfies the guarantees.
 
-Anonymous functions use the same vocabulary:
+Contract clauses appear only at the top of a named function's body, before any other statement, and each takes one pure `Bool` expression. A function with an `ensure` clause may not name a parameter or binding `result`. Contracts are part of the definition and affect its structural hash. Checking mode — always, debug-only, or proof-discharged — is a build setting, not syntax.
 
-```ln
-let square = fn(value: Int) => value * value
-let choose = fn[A](value: A) -> A => value
-let log = fn(message: String) -> Unit uses Console => {
-    Console.println(message)
-}
-```
-
-Lambda parameter annotations may be omitted when inference has enough context:
-
-```ln
-map(values, fn(value) => value * value)
-```
-
-Functions are first-class. Composition stays an ordinary function, not special syntax:
-
-```ln
-let h = compose(g, f) // h(x) == g(f(x))
-```
-
-### 5.4 Algebraic and record types
-
-A sum type uses leading variants:
+### Types
 
 ```ln
 type Option[A] =
@@ -331,124 +205,70 @@ type Option[A] =
 
 type Tree[A] =
     | Empty
-    | Node(value: A, left: Tree[A], right: Tree[A])
-```
+    | Node(value :: A, left :: Tree[A], right :: Tree[A])
 
-A record type uses named fields:
-
-```ln
 type Point = {
-    x: Float
-    y: Float
+    x :: Float
+    y :: Float
 }
-```
 
-A type alias uses any other type expression:
-
-```ln
 type UserId = Int
 type Transform = fn(Point) -> Point
-type Fallible[A, E] = Result[A, E]
 ```
 
-Constructors use ordinary call syntax:
+Core forms:
 
 ```ln
-None
-Some(42)
-Node(value: 1, left: Empty, right: Empty)
-Point(x: 2.0, y: 3.0)
+Int                              // named type
+std.time.Instant                 // qualified type
+Option[Int]                      // generic type
+(Int, String)                    // tuple
+()                               // Unit
+[Int]                            // immutable list
+{ x :: Float, y :: Float }       // anonymous record
+fn(Int, Int) -> Int              // pure function
+fn(String) -> Unit uses Console  // effectful function
 ```
 
-Within one call, positional arguments must precede named arguments. An argument name may occur at most once.
+There are no nullable types. Use `Option[T]`. Parentheses only group; a tuple requires a comma. `()` is the `Unit` type and value.
 
-### 5.5 Effects
+### Effects
 
 ```ln
 pub effect Console {
-    fn print(text: String) -> Unit
-    fn println(text: String) -> Unit
+    fn print(text :: String) -> Unit
+    fn println(text :: String) -> Unit
 }
 
-pub effect Clock {
-    fn now() -> Instant
+fn log(message :: String) -> Unit uses Console {
+    Console.println(message)
 }
 ```
 
-An effect declares operations but does not implement them. Calling an operation requires that effect after `uses` in the enclosing function:
+An effect declares an external capability interface, not its implementation. `uses Console` is an upper bound: the function may request `Console`; the runtime may still deny it. A caller must declare every effect its callees may request.
+
+### Laws
 
 ```ln
-fn timestamped(message: String) -> Unit uses Console and Clock {
-    let instant = Clock.now()
-    Console.println(show(instant) + ": " + message)
-}
+law addCommutes: forall a :: Int: forall b :: Int: a + b == b + a
+
+pub law revInvolution[A]: forall xs :: [A]: reverse(reverse(xs)) == xs
+
+law fibBase: fibLoop(0, 1, 0) == 0 and fibLoop(0, 1, 1) == 1
 ```
 
-`uses` is a type-and-effect declaration:
+A `law` names a pure Boolean proposition about the module's definitions. It reads “the law addCommutes states that for every a of type Int, for every b of type Int, a plus b equals b plus a.” Laws are declarations, not expressions: they never execute at runtime, take no arguments, and are the only place a type-domain binder (`::`) may appear. A law body over finite `in` domains is directly checkable; a law over type domains is checked by property testing in 0.1 and by proof later. The compiler verifies only that a law is well typed and pure. A law hashes like any other declaration, so a module's stated theorems travel with its code.
 
-| Form | Meaning |
-|---|---|
-| `fn hash(x: Data) -> Hash` | Pure. Requests no external capability. |
-| `fn now() -> Instant uses Clock` | May request `Clock`. |
-| `fn log(s: String) -> Unit uses Console and Clock` | May request either named effect. |
+## 5. Expressions
 
-- `use` imports a name; `uses` declares behavior.
-- A caller must declare every effect its callees may request.
-- Runtime grants remain separate and may deny a declared effect.
-- `uses` is an upper bound: declaration permits an effect; it does not execute one.
-
-The earlier `with` spelling is removed. `uses` says the intent directly.
-
-Runtime capability grants and effect handlers are intentionally outside the 0.1 surface syntax. The parser records declarations, operation calls, and effect sets; later phases connect them to the broker.
-
-## 6. Types
-
-Core type forms are:
-
-```ln
-Int                         // named type
-std.time.Instant            // qualified type
-Option[Int]                 // generic application
-(Int, String)               // tuple
-()                          // Unit
-[Int]                       // immutable list
-{ x: Float, y: Float }      // anonymous record type
-fn(Int, Int) -> Int         // pure function
-fn(String) -> Unit uses Console // effectful function
-```
-
-Function types use `fn(...) -> ...` rather than overloading parenthesized tuple syntax. Type application uses square brackets. There are no nullable types; define or use an algebraic type such as `Option[T]`.
-
-Parentheses group one type or expression. A tuple requires a comma: `(value,)` is a one-element tuple, while `(value)` is only `value`. The same rule applies to tuple patterns. `()` is the `Unit` value and type.
-
-Ownership, borrowing, lifetimes, type classes/traits, higher-kinded parameters, row polymorphism, and dependent types are not 0.1 syntax. They may be added only after the core grammar and semantics are exercised.
-
-## 7. Expressions and control flow
-
-### 7.1 Blocks and bindings
+### Blocks and conditionals
 
 ```ln
 let result = {
     let doubled = input * 2
     doubled + 1
 }
-```
 
-A block contains zero or more items separated by inserted or explicit semicolons. If its final item is an expression without an explicit semicolon, that expression is the block's value. Otherwise the block's value is `()`.
-
-`let` supports patterns and an optional type:
-
-```ln
-let count: Int = 3
-let (left, right) = pair
-let Some(value) = optional
-```
-
-A refutable `let` pattern such as `Some(value)` must later be proven irrefutable or rejected; use `match` for ordinary branching.
-
-### 7.2 Conditionals
-
-```ln
 let magnitude = if value < 0 {
     -value
 } else {
@@ -456,9 +276,9 @@ let magnitude = if value < 0 {
 }
 ```
 
-`if` is an expression. If `else` is omitted, the result type is `Unit`. Conditions must have type `Bool`; numbers and references are not implicitly truthy.
+A block returns its final unterminated expression; otherwise it returns `()`. An `if` condition must be `Bool`. An `if` without `else` returns `Unit`.
 
-### 7.3 Pattern matching
+### Pattern matching
 
 ```ln
 match value {
@@ -468,291 +288,148 @@ match value {
 }
 ```
 
-Match arms are separated by newline or comma. Guards follow the pattern with `if`. Exhaustiveness and unreachable arms are semantic checks, not parser checks.
+Supported patterns are wildcards, bindings, literals, variants, tuples, lists, records, and one list rest pattern such as `[first, ..rest]`. Matches must be exhaustive. Use `match` instead of a refutable `let`.
 
-Patterns in 0.1:
-
-```ln
-_                              // wildcard
-name                           // binding
-42                             // literal
-"text"
-true
-None                           // variant
-Some(value)
-Point(x: px, y: py)            // named fields
-(left, right)                  // tuple
-[]                             // list
-[first, second, ..rest]
-```
-
-Qualified constructors are allowed. Alternative patterns, ranges, and view patterns are deferred.
-
-### 7.4 Logic and finite quantifiers
-
-Logic uses short ASCII words:
-
-Model: [Book of Proof, Chapter 2](https://richardhammack.github.io/BookOfProof/Main.pdf). l1ne keeps conditional, biconditional, and quantifier meanings, but spells them with words.
-
-```ln
-not p
-p and q
-p or q
-p implies q
-p iff q
-```
-
-`p implies q` fails only when `p` is `true` and `q` is `false`. `p iff q` means **p if and only if q**:
-
-```ln
-(p implies q) and (q implies p)
-```
-
-Thus `implies` is one-way; `iff` requires both directions. `and`, `or`, and `implies` short-circuit left to right. No Unicode logic aliases exist in 0.1.
-
-Finite quantifiers follow mathematical reading without symbols:
-
-```ln
-let allPositive = forall x in values: x > 0
-let hasZero = exists x in values: x == 0
-let related = forall x in xs, y in ys: relation(x, y)
-```
-
-Binders nest left to right, so order matters:
-
-```ln
-forall x in xs: exists y in ys: relation(x, y)
-```
-
-Negation laws stay readable:
-
-```ln
-not (forall x in xs: p(x)) iff exists x in xs: not p(x)
-not (exists x in xs: p(x)) iff forall x in xs: not p(x)
-```
-
-`forall` and `exists` return `Bool`; predicates must be pure. Empty domain: `forall` is `true`, `exists` is `false`.
-
-### 7.5 Functional iteration
-
-l1ne has no `for`, `return`, `break`, or `continue`. Use recursion or pure library functions such as `map`, `filter`, and `fold`.
-
-```ln
-fn firstPositive(values: [Int]) -> Option[Int] {
-    match values {
-        [] => None
-        [value, ..rest] => if value > 0 {
-            Some(value)
-        } else {
-            firstPositive(rest)
-        }
-    }
-}
-```
-
-### 7.6 Calls, fields, and indexing
+### Calls, fields, ranges, and iteration
 
 ```ln
 sum(1, 2)
 connect(host: "localhost", port: 7000)
 point.x
 matrix[row][column]
-std.math.sqrt(value)
-```
-
-Postfix call, field, and index operations may chain. Optional chaining, implicit method receivers, operator sections, and user-defined postfix operators are not part of 0.1.
-
-### 7.7 Ranges
-
-```ln
 0..10       // excludes 10
 0..=10      // includes 10
 ```
 
-Ranges are expressions consumed by pure library functions and finite quantifiers. Open-ended ranges are deferred.
+Positional arguments must precede named arguments. Calls, field access, and indexing may chain. Ranges are finite values consumed by library functions, quantifiers, and comprehensions.
 
-## 8. Operator precedence
+There is no `for`, `return`, `break`, or `continue`. Use recursion or pure functions such as `map`, `filter`, and `fold`.
+
+### Comprehensions
+
+```ln
+[n * n : n in 0..10]                        // squares of 0 through 9
+[x : x in xs, x != 0]                       // xs without zeros
+[(x, y) : x in xs, y in ys, related(x, y)]  // related pairs
+```
+
+A comprehension reads “the list of every n squared such that n is in 0 to 10.” After the head expression, `:` introduces comma-separated clauses: either a binder `pattern in expression` or a pure `Bool` filter. The first clause must be a binder; clauses scope left to right, and later binders iterate fastest.
+
+The form desugars mechanically — `[f(x, y) : x in xs, p(x), y in ys]` is exactly
+
+```ln
+flatMap(xs, fn(x) => if p(x) { map(ys, fn(y) => f(x, y)) } else { [] })
+```
+
+so a comprehension is library `map`/`filter`/`flatMap`, not new semantics. In a list literal `,` separates elements and `:` never appears, so the two bracket forms cannot be confused. A comprehension is not a pattern.
+
+## 6. Lexical contract
+
+Identifiers are ASCII in 0.1:
+
+```text
+[A-Za-z_][A-Za-z0-9_]*
+```
+
+Use `lowerCamelCase` for values and modules, `UpperCamelCase` for types and effects, and `_` as the wildcard pattern.
+
+Reserved words are never identifiers:
+
+```text
+module  use  as  pub  fn  type  effect  const  let
+if  else  match  uses  not  and  or  implies  iff
+forall  exists  in  law  require  ensure  true  false
+```
+
+Literals include integers in bases 2, 8, 10, and 16; decimal floats; characters; escaped strings; raw backtick strings; and `true`/`false`. Numeric `_` separators are allowed only between digits. A leading `-` is a separate unary operator.
+
+Comments:
+
+```ln
+// line comment
+/* nested block comment */
+/// documentation for the next declaration
+```
+
+Normal comments are discarded. Documentation comments attach to the next declaration but are excluded from structural hashes.
+
+Operators and semantic markers:
+
+```text
+:  ::  =  =>  ->
++  -  *  /  %  **
+==  !=  <  <=  >  >=
+..  ..=
+not  and  or  implies  iff
+```
+
+Unknown punctuation is an error. The lexer chooses the longest valid token, so `::`, `=>`, `->`, `<=`, `>=`, `==`, `!=`, `..`, and `..=` are single tokens. `exists!` is likewise one token; a bare `!` appears in no other position.
+
+### Automatic semicolons
+
+A newline becomes `;` when it is outside parentheses and brackets, the previous token can end an expression or declaration, and the next token does not continue it. Newlines before `}`, `else`, `|`, `,`, `.`, `)`, or `]` do not insert a semicolon. End of file behaves like a newline.
+
+Braces do not suppress insertion. Keep `{` on the same line as `fn`, `effect`, `if`, and `match` headers.
+
+### Math display profile
+
+Editors and formatters may render source through a fixed display profile. The map is bijective, applies only to these tokens, and never changes what is stored or hashed — source files remain ASCII:
+
+| Source | Display |
+|---|---|
+| `forall` / `exists` / `exists!` | ∀ ∃ ∃! |
+| `in` | ∈ |
+| `implies` / `iff` | ⟹ ⟺ |
+| `->` | → |
+| `<=` / `>=` / `!=` | ≤ ≥ ≠ |
+
+The glyphs are display-only: the lexer rejects them as input. One spelling exists in source; beauty is the renderer's job. Because structural hashing ignores presentation, rendering is provably semantics-free.
+
+## 7. Precedence
 
 From tightest to loosest:
 
-| Level | Operators/forms | Associativity |
+| Level | Forms | Associativity |
 |---:|---|---|
 | 1 | call `()`, index `[]`, field `.` | left |
-| 2 | unary `not`, unary `-`, unary `+` | right |
+| 2 | unary `not`, `-`, `+` | right |
 | 3 | `**` | right |
 | 4 | `*`, `/`, `%` | left |
 | 5 | `+`, `-` | left |
-| 6 | `..`, `..=` | non-associative |
-| 7 | `<`, `<=`, `>`, `>=` | non-associative |
-| 8 | `==`, `!=` | non-associative |
+| 6 | `..`, `..=` | none |
+| 7 | `<`, `<=`, `>`, `>=` | chain |
+| 8 | `==`, `!=` | chain (`==` only) |
 | 9 | `and` | left |
 | 10 | `or` | left |
 | 11 | `implies` | right |
-| 12 | `iff` | non-associative |
+| 12 | `iff` | none |
 
-Comparison chaining is rejected: write `low <= value and value <= high`. Operator overloading and custom operators are deferred.
+Range chaining is rejected. Comparison chains are legal when monotone: every link from `{<, <=}`, every link from `{>, >=}`, or every link `==`. A chain desugars to pairwise conjunction with each operand evaluated once — `low <= x < high` is exactly `low <= x and x < high` and reads “x is at least low and less than high.” Direction-mixing chains and any chain containing `!=` are rejected.
 
-## 9. Parser grammar
+`not` binds tighter than comparisons: `not value < limit` parses as `(not value) < limit` and fails type checking. Write `not (value < limit)`. Quantifiers bind loosest of all; `forall`, `exists`, and `exists!` absorb everything to their right, and a quantified operand requires parentheses: `(forall x in xs: p(x)) implies q`.
 
-This EBNF operates on tokens after comment removal and semicolon insertion. `sep` means one or more `;` tokens. Commas shown as optional trailing commas are real tokens; newlines inside `()` and `[]` do not replace them.
+## 8. Required validation
 
-```ebnf
-source          = moduleDecl, sep,
-                  { useDecl, sep },
-                  { declaration, sep }, EOF ;
+The parser or immediate validation pass rejects:
 
-moduleDecl      = "module", modulePath ;
-modulePath      = identifier, { ".", identifier } ;
-
-useDecl         = "use", modulePath,
-                  [ "as", identifier
-                  | ".", "{", importItem,
-                    { ",", importItem }, [ "," ], "}" ] ;
-importItem      = identifier, [ "as", identifier ] ;
-
-declaration     = { attribute, { ";" } }, [ "pub" ],
-                  ( constDecl | typeDecl | effectDecl | fnDecl ) ;
-
-attribute       = "@", modulePath,
-                  [ "(", [ attributeArg,
-                    { ",", attributeArg }, [ "," ] ], ")" ] ;
-attributeArg    = literal | identifier | identifier, "=", literal ;
-
-constDecl       = "const", identifier, [ ":", typeExpr ], "=", expr ;
-
-fnDecl          = "fn", identifier, [ typeParams ],
-                  "(", [ parameter, { ",", parameter }, [ "," ] ], ")",
-                  [ "->", typeExpr ], [ effectClause ], block ;
-parameter       = identifier, ":", typeExpr ;
-typeParams      = "[", identifier, { ",", identifier }, [ "," ], "]" ;
-effectClause     = "uses", typePath, { "and", typePath } ;
-
-effectDecl      = "effect", identifier, "{", { ";" },
-                  { effectOperation, sep }, [ effectOperation ],
-                  { ";" }, "}" ;
-effectOperation = "fn", identifier, [ typeParams ],
-                  "(", [ parameter, { ",", parameter }, [ "," ] ], ")",
-                  [ "->", typeExpr ] ;
-
-typeDecl        = "type", identifier, [ typeParams ], "=", typeBody ;
-typeBody        = sumType | recordType | typeExpr ;
-sumType         = "|", variant, { "|", variant } ;
-variant         = identifier,
-                  [ "(", [ variantField,
-                    { ",", variantField }, [ "," ] ], ")" ] ;
-variantField    = typeExpr | identifier, ":", typeExpr ;
-recordType      = "{", { ";" }, [ recordField,
-                  { fieldSep, recordField }, [ fieldSep ] ], "}" ;
-recordField     = identifier, ":", typeExpr ;
-fieldSep        = "," | sep ;
-
-typeExpr        = typePath, [ typeArgs ]
-                | "(", [ typeExpr, { ",", typeExpr }, [ "," ] ], ")"
-                | "[", typeExpr, "]"
-                | recordType
-                | functionType ;
-typePath        = identifier, { ".", identifier } ;
-typeArgs        = "[", typeExpr, { ",", typeExpr }, [ "," ], "]" ;
-functionType    = "fn", "(", [ typeExpr,
-                  { ",", typeExpr }, [ "," ] ], ")",
-                  "->", typeExpr, [ effectClause ] ;
-
-block           = "{", { ";" },
-                  { blockItem, sep }, [ blockItem ], { ";" }, "}" ;
-blockItem       = letItem | expr ;
-letItem         = "let", pattern, [ ":", typeExpr ], "=", expr ;
-
-expr            = binaryExpr ;
-ifExpr          = "if", expr, block, [ "else", ( ifExpr | block ) ] ;
-matchExpr       = "match", expr, "{", { ";" },
-                  [ matchArm, { armSep, matchArm }, [ armSep ] ], "}" ;
-matchArm        = pattern, [ "if", expr ], "=>", expr ;
-armSep          = "," | sep ;
-quantifiedExpr  = ( "forall" | "exists" ), quantifierBinding,
-                  { ",", quantifierBinding }, ":", expr ;
-quantifierBinding = pattern, "in", expr ;
-
-lambdaExpr      = "fn", [ typeParams ],
-                  "(", [ lambdaParam,
-                    { ",", lambdaParam }, [ "," ] ], ")",
-                  [ "->", typeExpr ], [ effectClause ], "=>", expr ;
-lambdaParam     = identifier, [ ":", typeExpr ] ;
-
-binaryExpr      = unaryExpr, { binaryOp, unaryExpr } ;
-unaryExpr       = { "not" | "+" | "-" }, postfixExpr ;
-postfixExpr     = primaryExpr, { callSuffix | indexSuffix | fieldSuffix } ;
-callSuffix      = "(", [ callArg, { ",", callArg }, [ "," ] ], ")" ;
-callArg         = [ identifier, ":" ], expr ;
-indexSuffix     = "[", expr, "]" ;
-fieldSuffix     = ".", identifier ;
-
-primaryExpr     = literal | identifier | "_"
-                | "(", [ expr, { ",", expr }, [ "," ] ], ")"
-                | "[", [ expr, { ",", expr }, [ "," ] ], "]"
-                | block | ifExpr | matchExpr
-                | quantifiedExpr | lambdaExpr ;
-
-pattern         = "_" | literal | patternPath
-                | "(", [ pattern, { ",", pattern }, [ "," ] ], ")"
-                | "[", [ listPattern,
-                    { ",", listPattern }, [ "," ] ], "]" ;
-patternPath     = identifier, { ".", identifier },
-                  [ "(", [ patternField,
-                    { ",", patternField }, [ "," ] ], ")" ] ;
-patternField    = pattern | identifier, ":", pattern ;
-listPattern     = pattern | "..", identifier ;
-
-literal         = integer | float | character | string | rawString
-                | "true" | "false" ;
-binaryOp        = "**" | "*" | "/" | "%" | "+" | "-"
-                | ".." | "..=" | "<" | "<=" | ">" | ">="
-                | "==" | "!=" | "and" | "or" | "implies" | "iff" ;
-sep             = ";", { ";" } ;
-```
-
-`binaryExpr` above is a compact grammar placeholder for a precedence parser. Implement it as a Pratt parser or as one recursive-descent function per precedence level. Non-associative levels reject a second unparenthesized operator at the same level.
-
-### Required grammar validations
-
-The parser or immediate syntax-validation pass rejects:
-
-- mixed positional and named variant fields in one declaration;
-- positional call arguments after a named argument;
-- duplicate named arguments;
-- more than one list rest pattern or a rest pattern before a later element;
-- chained range or comparison operators without parentheses;
+- missing or duplicate module declarations, declarations before imports, and unknown punctuation;
+- positional arguments after named arguments or duplicate named arguments;
+- mixed positional and named fields in one variant;
+- more than one list rest pattern or a non-final rest pattern;
+- range chaining, non-monotone comparison chains, and chains containing `!=`;
+- a type-domain binder (`::`) outside a `law` body, or a `law` whose body is not `Bool`;
+- contract clauses after the first non-clause statement or outside a named function's body, and a binding named `result` in a function with an `ensure` clause;
+- a comprehension whose first clause is not a binder, or comprehension syntax in pattern position;
 - a bare `_` in expression position;
-- missing `module`, declarations before imports, and duplicate module declarations.
+- non-Boolean conditions and non-exhaustive matches during semantic checking;
+- effects requested inside laws, contract clauses, comprehensions, or quantifier predicates during effect checking.
 
-## 10. Lexer and parser construction order
+The frontend must keep lexing, parsing, name resolution, type checking, effect checking, and structural hashing as separate stages.
 
-Build the frontend in this order so each layer can be exercised independently:
+## 9. Deferred from 0.1
 
-1. **Source positions** — byte offset, line, column, and half-open spans.
-2. **Raw lexer** — identifiers, keywords, literals, comments, punctuation, and lexical errors.
-3. **Layout pass** — discard normal comments, attach documentation comments as out-of-band declaration trivia, remove them from the token stream, and insert synthetic semicolons.
-4. **Module parser** — `module`, `use`, attributes, and declaration boundaries.
-5. **Type parser** — named, generic, tuple, list, record, and function types.
-6. **Expression parser** — postfix forms first, then unary and precedence climbing/Pratt parsing.
-7. **Structured forms** — blocks, `if`, `match`, `forall`, `exists`, lambdas, and patterns.
-8. **Syntax validation** — context rules that are clearer outside the grammar.
-9. **Surface AST normalization** — remove separators and redundant parentheses while retaining spans and documentation metadata.
+Mutation, assignment, imperative loops, early return, methods, classes, traits, ownership syntax, user-defined effect handlers, async/await, string interpolation, macros, custom operators, open-ended ranges, default or variadic arguments, wildcard imports, nullable references, implicit numeric conversions, and multi-binder quantifiers (`forall x, y in xs`).
 
-Do not combine lexing, name resolution, type checking, effect checking, or structural hashing. The parser should accept unknown names and attributes and produce a complete surface AST or a structured diagnostic.
+Rejected outright, never to be added: `where` clauses (a second binding convention beside `let`); implicit universal quantification of unbound variables (mathematical prose allows it; a precise language cannot); Unicode as input syntax (the display profile renders it; the lexer refuses it).
 
-## 11. Explicitly deferred syntax
-
-The following stay out until real programs demonstrate a need:
-
-- mutation, assignment, imperative loops, and early return;
-- methods, classes, traits/type classes, and operator overloading;
-- ownership, borrowing, and lifetime annotations;
-- effect handlers in user source;
-- async/await syntax and first-class futures;
-- string interpolation and format-string mini-languages;
-- macros, conditional compilation, and custom attributes with expression arguments;
-- custom operators, Unicode aliases, comparison chaining, and open-ended ranges;
-- default arguments, variadic parameters, and wildcard imports;
-- nullable references and implicit numeric conversions.
-
-This boundary is part of version 0.1. Additions should include a motivating `.ln` example, lexer impact, grammar delta, precedence impact when applicable, and the smallest ambiguity introduced.
+A future syntax addition needs a motivating example, one canonical English reading, and an explicit account of lexer, grammar, precedence, and ambiguity changes.
