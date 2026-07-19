@@ -7,6 +7,9 @@ module Cli
   )
 where
 
+import Parser qualified
+import Tokenizer qualified
+
 data Command
   = Compile FilePath -- Compile a source file
   | Help -- Show help
@@ -47,6 +50,9 @@ dispatch = \case
 
 compile :: FilePath -> IO ()
 compile path = do
-  putStrLn $ "Compiling: " ++ path
-  putStrLn "[Compiler not yet implemented]"
-  putStrLn "Next: parse → content-address → typecheck → codegen"
+  source <- readFile path
+  case Tokenizer.tokenize path source >>= Parser.parseModule of
+    Left err -> fail err
+    Right ast -> do
+      putStrLn $ "Parsed: " ++ path
+      print ast

@@ -14,6 +14,10 @@ executable l1ne
     import:           warnings
     main-is:          Main.hs
     other-modules:    Cli
+                      Parser
+                      Syntax
+                      Tokenizer
     hs-source-dirs:   src/l1ne
+                      src
     build-depends:    base >=4.18 && <5
     default-language: GHC2021
