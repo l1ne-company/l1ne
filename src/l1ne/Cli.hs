@@ -7,7 +7,11 @@ module Cli
   )
 where
 
+import Data.Maybe (fromMaybe)
 import Parser qualified
+import Syntax (Module)
+import System.Exit (die)
+import System.IO.Error (tryIOError)
 import Tokenizer qualified
 
 data Command
@@ -18,14 +22,18 @@ data Command
 
 parseArgs :: [String] -> Either String Command
 parseArgs [] = Right Help
-parseArgs ["--help"] = Right Help
-parseArgs ["-h"] = Right Help
-parseArgs ["help"] = Right Help
-parseArgs ["--version"] = Right Version
-parseArgs ["-v"] = Right Version
-parseArgs ["version"] = Right Version
-parseArgs [filepath] = Right (Compile filepath)
+parseArgs [arg] = Right (fromMaybe (Compile arg) (lookup arg namedCommands))
 parseArgs args = Left $ "Expected a single source file, got: " ++ unwords args
+
+namedCommands :: [(String, Command)]
+namedCommands =
+  [ (flag, command)
+    | (command, flags) <-
+        [ (Help, ["--help", "-h", "help"]),
+          (Version, ["--version", "-v", "version"])
+        ],
+      flag <- flags
+  ]
 
 showHelp :: String
 showHelp =
@@ -48,11 +56,14 @@ dispatch = \case
   Version -> putStrLn showVersion
   Compile path -> compile path
 
+-- | The pure frontend pipeline: everything between reading the file and
+-- reporting is total and effect-free.
+compileSource :: FilePath -> String -> Either String Module
+compileSource path source = Tokenizer.tokenize path source >>= Parser.parseModule
+
 compile :: FilePath -> IO ()
 compile path = do
-  source <- readFile path
-  case Tokenizer.tokenize path source >>= Parser.parseModule of
-    Left err -> fail err
-    Right ast -> do
-      putStrLn $ "Parsed: " ++ path
-      print ast
+  source <- tryIOError (readFile path)
+  either (die . show) (either die report . compileSource path) source
+  where
+    report ast = putStrLn ("Parsed: " ++ path) *> print ast

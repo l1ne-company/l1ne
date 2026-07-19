@@ -5,6 +5,9 @@ module Parser
   )
 where
 
+import Control.Applicative (Alternative (..), optional)
+import Data.Foldable (asum)
+import Data.Functor (void)
 import Syntax
 import Tokenizer
 
@@ -27,46 +30,42 @@ instance Monad Parser where
     (value, rest) <- runParser parser tokens
     runParser (next value) rest
 
+instance Alternative Parser where
+  empty = failP "no alternative matched"
+  left <|> right = Parser $ \tokens ->
+    either (const (runParser right tokens)) Right (runParser left tokens)
+
 parseModule :: [Token] -> Either String Module
-parseModule tokens = do
-  (modl, _) <- runParser (skipSemis *> moduleP <* eofP) tokens
-  Right modl
+parseModule = fmap fst . runParser (skipSemis *> moduleP <* eofP)
 
 moduleP :: Parser Module
 moduleP = do
   keyword "module"
   name <- qualifiedNameP
   semi
-  imports <- manyP importP
-  decls <- manyP declP
+  imports <- many importP
+  decls <- many declP
   pure (Module name imports decls)
 
 importP :: Parser Import
 importP = do
   keyword "use"
   path <- qualifiedNameP
-  items <- optionalP (symbol "." *> importItemsP)
-  alias <- optionalP (keyword "as" *> identP)
+  items <- optional (symbol "." *> importItemsP)
+  alias <- optional (keyword "as" *> identP)
   semi
   skipSemis
   pure (Import path alias items)
   where
-    importItemsP = do
-      symbol "{"
-      values <- sepByP importItemP (symbol ",")
-      symbol "}"
-      pure values
-    importItemP = do
-      name <- identP
-      alias <- optionalP (keyword "as" *> identP)
-      pure (ImportItem name alias)
+    importItemsP = braces (sepByP importItemP (symbol ","))
+    importItemP = ImportItem <$> identP <*> optional (keyword "as" *> identP)
 
 declP :: Parser Decl
 declP = do
   skipSemis
-  attrs <- manyP attributeP
+  attrs <- many attributeP
   visibility <- optionP Private (Public <$ keyword "pub")
-  choiceP
+  asum
     [ constDeclP visibility,
       fnDeclP attrs visibility,
       typeDeclP visibility,
@@ -76,15 +75,13 @@ declP = do
     <?> "declaration"
 
 attributeP :: Parser Attribute
-attributeP = do
-  symbol "@"
-  Attribute <$> identP
+attributeP = symbol "@" *> (Attribute <$> identP)
 
 constDeclP :: Visibility -> Parser Decl
 constDeclP visibility = do
   keyword "const"
   name <- identP
-  typ <- optionalP (symbol "::" *> typeExprP)
+  typ <- optional (symbol "::" *> typeExprP)
   symbol "="
   expr <- exprP
   semi
@@ -97,7 +94,7 @@ fnDeclP attrs visibility = do
   name <- identP
   generics <- optionP [] genericNamesP
   params <- parens (sepByP paramP (symbol ","))
-  result <- optionalP (symbol "->" *> typeExprP)
+  result <- optional (symbol "->" *> typeExprP)
   effects <- usesP
   body <- blockStmtsP
   skipSemis
@@ -118,7 +115,7 @@ effectDeclP :: Visibility -> Parser Decl
 effectDeclP visibility = do
   keyword "effect"
   name <- identP
-  members <- braces (skipSemis *> manyP effectMemberP)
+  members <- braces (skipSemis *> many effectMemberP)
   skipSemis
   pure (EffectDecl visibility name members)
   where
@@ -126,7 +123,7 @@ effectDeclP visibility = do
       keyword "fn"
       name <- identP
       params <- parens (sepByP paramP (symbol ","))
-      result <- optionalP (symbol "->" *> typeExprP)
+      result <- optional (symbol "->" *> typeExprP)
       effects <- usesP
       semi
       skipSemis
@@ -144,10 +141,7 @@ lawDeclP visibility = do
   pure (LawDecl visibility name generics body)
 
 paramP :: Parser Param
-paramP = do
-  pat <- patternP
-  typ <- optionalP (symbol "::" *> typeExprP)
-  pure (Param pat typ)
+paramP = Param <$> patternP <*> optional (symbol "::" *> typeExprP)
 
 genericNamesP :: Parser [Name]
 genericNamesP = brackets (sepBy1P identP (symbol ","))
@@ -156,9 +150,7 @@ usesP :: Parser [Name]
 usesP = optionP [] $ keyword "uses" *> sepBy1P identP (keyword "and")
 
 typeSumP :: Parser TypeExpr
-typeSumP = do
-  variants <- someP variantP
-  pure (TypeSum variants)
+typeSumP = TypeSum <$> some variantP
   where
     variantP = do
       skipSemis
@@ -190,12 +182,12 @@ fnTypeP = do
 typePostfixP :: Parser TypeExpr
 typePostfixP = do
   base <- typeAtomP
-  args <- optionalP (brackets (sepBy1P typeExprP (symbol ",")))
+  args <- optional (brackets (sepBy1P typeExprP (symbol ",")))
   pure $ maybe base (TypeGeneric base) args
 
 typeAtomP :: Parser TypeExpr
 typeAtomP =
-  choiceP
+  asum
     [ TypeList <$> brackets typeExprP,
       TypeRecord <$> braces (skipSemis *> sepByP typeFieldP fieldSepP <* skipSemis),
       tupleOrGroupedTypeP,
@@ -213,11 +205,11 @@ typeAtomP =
 tupleOrGroupedTypeP :: Parser TypeExpr
 tupleOrGroupedTypeP = do
   symbol "("
-  choiceP
+  asum
     [ TypeUnit <$ symbol ")",
       do
         first <- typeExprP
-        rest <- manyP (symbol "," *> typeExprP)
+        rest <- many (symbol "," *> typeExprP)
         symbol ")"
         pure $ case rest of
           [] -> first
@@ -225,30 +217,25 @@ tupleOrGroupedTypeP = do
     ]
 
 blockStmtsP :: Parser [Stmt]
-blockStmtsP = braces $ do
-  skipSemis
-  statements <- manyP stmtP
-  skipSemis
-  pure statements
+blockStmtsP = braces (skipSemis *> many stmtP <* skipSemis)
+
+blockExprP :: Parser Expr
+blockExprP = Block <$> blockStmtsP
 
 stmtP :: Parser Stmt
 stmtP =
-  choiceP
+  asum
     [ letStmtP,
       ContractStmt . Require <$> (keyword "require" *> exprP <* semi <* skipSemis),
       ContractStmt . Ensure <$> (keyword "ensure" *> exprP <* semi <* skipSemis),
-      do
-        expr <- exprP
-        _ <- optionalP semi
-        skipSemis
-        pure (ExprStmt expr)
+      ExprStmt <$> (exprP <* optional semi <* skipSemis)
     ]
 
 letStmtP :: Parser Stmt
 letStmtP = do
   keyword "let"
   pat <- patternP
-  typ <- optionalP (symbol "::" *> typeExprP)
+  typ <- optional (symbol "::" *> typeExprP)
   symbol "="
   value <- exprP
   semi
@@ -260,27 +247,39 @@ exprP = quantifierP <|> infixP 0
 
 quantifierP :: Parser Expr
 quantifierP = do
-  q <- choiceP [textKeyword "forall", textKeyword "exists", textKeyword "exists!"]
+  q <- asum [textKeyword "forall", textKeyword "exists", textKeyword "exists!"]
   binder <- patternP
   domain <- (InDomain <$> (keyword "in" *> exprP)) <|> (TypeDomain <$> (symbol "::" *> typeExprP))
   symbol ":"
   Quantifier q binder domain <$> exprP
 
 infixP :: Int -> Parser Expr
-infixP minPrec = do
-  left <- prefixP
-  climb minPrec left
+infixP minPrec = prefixP >>= climb
   where
-    climb minP left = do
+    climb left = do
       next <- peekKind
       case next >>= infixInfo of
         Just (prec, assoc, op)
-          | prec >= minP -> do
+          | prec >= minPrec -> do
               _ <- anyToken
               right <- infixP (if assoc == RightAssoc then prec else prec + 1)
-              let node = if op == ".." then Range left False right else if op == "..=" then Range left True right else Binary op left right
-              climb minP node
+              rejectChain assoc prec op
+              climb (node op left right)
         _ -> pure left
+    node ".." left right = Range left False right
+    node "..=" left right = Range left True right
+    node op left right = Binary op left right
+
+-- A non-associative operator must not be followed by another operator of
+-- the same precedence: `a iff b iff c` and `0..3..9` are parse errors.
+rejectChain :: Assoc -> Int -> String -> Parser ()
+rejectChain NonAssoc prec op = do
+  next <- peekKind
+  case next >>= infixInfo of
+    Just (prec', _, op')
+      | prec' == prec -> failP (op' ++ " cannot follow " ++ op ++ " without parentheses")
+    _ -> pure ()
+rejectChain _ _ _ = pure ()
 
 data Assoc = LeftAssoc | RightAssoc | NonAssoc
   deriving (Eq)
@@ -308,7 +307,7 @@ infixInfo _ = Nothing
 
 prefixP :: Parser Expr
 prefixP =
-  choiceP
+  asum
     [ Unary <$> textKeyword "not" <*> prefixP,
       Unary <$> symbolText "-" <*> prefixP,
       Unary <$> symbolText "+" <*> prefixP,
@@ -319,36 +318,25 @@ postfixP :: Parser Expr
 postfixP = atomP >>= go
   where
     go expr =
-      choiceP
-        [ do
-            args <- parens (sepByP argP (symbol ","))
-            go (Call expr args),
-          do
-            symbol "."
-            name <- identP
-            go (Field expr name),
-          do
-            index <- brackets exprP
-            go (Index expr index),
+      asum
+        [ parens (sepByP argP (symbol ",")) >>= go . Call expr,
+          symbol "." *> identP >>= go . Field expr,
+          brackets exprP >>= go . Index expr,
           pure expr
         ]
 
 argP :: Parser Arg
 argP =
-  ( do
-      name <- identP
-      symbol ":"
-      NamedArg name <$> exprP
-  )
+  (NamedArg <$> identP <* symbol ":" <*> exprP)
     <|> (PosArg <$> exprP)
 
 atomP :: Parser Expr
 atomP =
-  choiceP
+  asum
     [ ifP,
       matchP,
       lambdaP,
-      Block <$> blockStmtsP,
+      blockExprP,
       listOrCompP,
       tupleOrGroupedExprP,
       literalP,
@@ -360,23 +348,23 @@ ifP :: Parser Expr
 ifP = do
   keyword "if"
   cond <- exprP
-  thenBranch <- Block <$> blockStmtsP
-  elseBranch <- optionalP (keyword "else" *> ((If <$> (keyword "if" *> exprP) <*> (Block <$> blockStmtsP) <*> optionalP (keyword "else" *> atomP)) <|> (Block <$> blockStmtsP)))
+  thenBranch <- blockExprP
+  elseBranch <- optional (keyword "else" *> (ifP <|> blockExprP))
   pure (If cond thenBranch elseBranch)
 
 matchP :: Parser Expr
 matchP = do
   keyword "match"
   subject <- exprP
-  arms <- braces (skipSemis *> manyP matchArmP <* skipSemis)
+  arms <- braces (skipSemis *> many matchArmP <* skipSemis)
   pure (Match subject arms)
   where
     matchArmP = do
       pat <- patternP
-      guard <- optionalP (keyword "if" *> exprP)
+      guard <- optional (keyword "if" *> exprP)
       symbol "=>"
       body <- exprP
-      _ <- optionalP semi
+      _ <- optional semi
       skipSemis
       pure (MatchArm pat guard body)
 
@@ -390,41 +378,37 @@ lambdaP = do
 listOrCompP :: Parser Expr
 listOrCompP = do
   symbol "["
-  choiceP
+  asum
     [ List [] <$ symbol "]",
       do
         first <- exprP
-        choiceP
+        asum
           [ do
               symbol ":"
               clauses <- sepBy1P compClauseP (symbol ",")
               symbol "]"
               pure (Comprehension first clauses),
             do
-              rest <- manyP (symbol "," *> exprP)
-              _ <- optionalP (symbol ",")
+              rest <- many (symbol "," *> exprP)
+              _ <- optional (symbol ",")
               symbol "]"
               pure (List (first : rest))
           ]
     ]
   where
     compClauseP =
-      ( do
-          pat <- patternP
-          keyword "in"
-          CompBind pat <$> exprP
-      )
+      (CompBind <$> patternP <* keyword "in" <*> exprP)
         <|> (CompFilter <$> exprP)
 
 tupleOrGroupedExprP :: Parser Expr
 tupleOrGroupedExprP = do
   symbol "("
-  choiceP
+  asum
     [ Unit <$ symbol ")",
       do
         first <- exprP
-        rest <- manyP (symbol "," *> exprP)
-        _ <- optionalP (symbol ",")
+        rest <- many (symbol "," *> exprP)
+        _ <- optional (symbol ",")
         symbol ")"
         pure $ case rest of
           [] -> first
@@ -435,28 +419,25 @@ literalP :: Parser Expr
 literalP = Lit <$> literalValueP
 
 literalValueP :: Parser Literal
-literalValueP =
-  Parser $ \case
-    Token (TInt value) _ : rest -> Right (LInt value, rest)
-    Token (TFloat value) _ : rest -> Right (LFloat value, rest)
-    Token (TString value) _ : rest -> Right (LString value, rest)
-    Token (TRawString value) _ : rest -> Right (LRawString value, rest)
-    Token (TChar value) _ : rest -> Right (LChar value, rest)
-    Token (TKeyword "true") _ : rest -> Right (LBool True, rest)
-    Token (TKeyword "false") _ : rest -> Right (LBool False, rest)
-    tok : _ -> Left $ here tok ++ "expected literal"
-    [] -> Left "unexpected end of input, expected literal"
+literalValueP = satisfy "literal" $ \case
+  TInt value -> Just (LInt value)
+  TFloat value -> Just (LFloat value)
+  TString value -> Just (LString value)
+  TRawString value -> Just (LRawString value)
+  TChar value -> Just (LChar value)
+  TKeyword "true" -> Just (LBool True)
+  TKeyword "false" -> Just (LBool False)
+  _ -> Nothing
 
 nameExprP :: Parser Expr
-nameExprP = do
-  names <- qualifiedNameP
-  pure $ case names of
-    [name] -> Var name
-    _ -> Qualified names
+nameExprP =
+  qualifiedNameP >>= \case
+    [name] -> pure (Var name)
+    names -> pure (Qualified names)
 
 patternP :: Parser Pattern
 patternP =
-  choiceP
+  asum
     [ PWildcard <$ identText "_",
       PLit <$> literalValueP,
       patternListP,
@@ -469,7 +450,7 @@ patternP =
 patternNameP :: Parser Pattern
 patternNameP = do
   names <- qualifiedNameP
-  args <- optionalP (parens (sepByP argPatternP (symbol ",")))
+  args <- optional (parens (sepByP argPatternP (symbol ",")))
   pure $ case args of
     Nothing
       | [name] <- names -> PBind name
@@ -478,34 +459,31 @@ patternNameP = do
 
 argPatternP :: Parser ArgPattern
 argPatternP =
-  ( do
-      name <- identP
-      symbol ":"
-      NamedPat name <$> patternP
-  )
+  (NamedPat <$> identP <* symbol ":" <*> patternP)
     <|> (PosPat <$> patternP)
 
 patternListP :: Parser Pattern
-patternListP = brackets $ do
-  choiceP
-    [ pure (PList [] Nothing) <* lookaheadSymbol "]",
-      do
-        first <- patternP
-        rest <- manyP (symbol "," *> patternP)
-        tailName <- optionalP (symbol "," *> symbol ".." *> identP)
-        _ <- optionalP (symbol ",")
-        pure (PList (first : rest) tailName)
-    ]
+patternListP =
+  brackets $
+    asum
+      [ pure (PList [] Nothing) <* lookaheadSymbol "]",
+        do
+          first <- patternP
+          rest <- many (symbol "," *> patternP)
+          tailName <- optional (symbol "," *> symbol ".." *> identP)
+          _ <- optional (symbol ",")
+          pure (PList (first : rest) tailName)
+      ]
 
 patternTupleP :: Parser Pattern
 patternTupleP = do
   symbol "("
-  choiceP
+  asum
     [ PUnit <$ symbol ")",
       do
         first <- patternP
-        rest <- manyP (symbol "," *> patternP)
-        _ <- optionalP (symbol ",")
+        rest <- many (symbol "," *> patternP)
+        _ <- optional (symbol ",")
         symbol ")"
         pure $ case rest of
           [] -> first
@@ -523,87 +501,83 @@ patternRecordP =
     fieldSepP = symbol "," <|> semi
 
 qualifiedNameP :: Parser [Name]
-qualifiedNameP = do
-  first <- identP
-  rest <- manyP (symbol "." *> identP)
-  pure (first : rest)
+qualifiedNameP = (:) <$> identP <*> many (symbol "." *> identP)
+
+-- Token primitives -----------------------------------------------------------
+
+-- | The single primitive every leaf parser is built from: consume one token
+-- when the extractor accepts its kind, otherwise fail with a positioned
+-- message naming what was expected.
+satisfy :: String -> (TokenKind -> Maybe a) -> Parser a
+satisfy expected extract = Parser $ \case
+  tok : rest | Just value <- extract (tokenKind tok) -> Right (value, rest)
+  tok : _ -> Left $ here tok ++ "expected " ++ expected
+  [] -> Left $ "unexpected end of input, expected " ++ expected
 
 identP :: Parser Name
-identP =
-  Parser $ \case
-    Token (TIdent value) _ : rest -> Right (value, rest)
-    tok : _ -> Left $ here tok ++ "expected identifier"
-    [] -> Left "unexpected end of input, expected identifier"
+identP = satisfy "identifier" $ \case
+  TIdent value -> Just value
+  _ -> Nothing
 
 identText :: String -> Parser String
-identText expected =
-  Parser $ \case
-    Token (TIdent value) _ : rest
-      | value == expected -> Right (value, rest)
-    tok : _ -> Left $ here tok ++ "expected " ++ expected
-    [] -> Left $ "unexpected end of input, expected " ++ expected
+identText expected = satisfy expected $ \case
+  TIdent value | value == expected -> Just value
+  _ -> Nothing
 
 keyword :: String -> Parser ()
-keyword expected =
-  Parser $ \case
-    Token (TKeyword value) _ : rest
-      | value == expected -> Right ((), rest)
-    tok : _ -> Left $ here tok ++ "expected " ++ expected
-    [] -> Left $ "unexpected end of input, expected " ++ expected
+keyword expected = satisfy expected $ \case
+  TKeyword value | value == expected -> Just ()
+  _ -> Nothing
 
 textKeyword :: String -> Parser String
 textKeyword text = text <$ keyword text
 
 symbol :: String -> Parser ()
-symbol expected =
-  Parser $ \case
-    Token (TSymbol value) _ : rest
-      | value == expected -> Right ((), rest)
-    tok : _ -> Left $ here tok ++ "expected " ++ expected
-    [] -> Left $ "unexpected end of input, expected " ++ expected
+symbol expected = satisfy expected $ \case
+  TSymbol value | value == expected -> Just ()
+  _ -> Nothing
 
 symbolText :: String -> Parser String
 symbolText text = text <$ symbol text
 
 semi :: Parser ()
-semi =
-  Parser $ \case
-    Token TSemi _ : rest -> Right ((), rest)
-    Token (TSymbol ";") _ : rest -> Right ((), rest)
-    tok : _ -> Left $ here tok ++ "expected semicolon"
-    [] -> Left "unexpected end of input, expected semicolon"
+semi = satisfy "semicolon" $ \case
+  TSemi -> Just ()
+  _ -> Nothing
 
 skipSemis :: Parser ()
-skipSemis = manyP semi *> pure ()
+skipSemis = void (many semi)
 
 eofP :: Parser ()
-eofP =
-  Parser $ \case
-    [Token TEOF _] -> Right ((), [])
-    Token TEOF _ : rest -> Right ((), rest)
-    tok : _ -> Left $ here tok ++ "expected end of input"
-    [] -> Right ((), [])
+eofP = Parser $ \case
+  Token TEOF _ : rest -> Right ((), rest)
+  tok : _ -> Left $ here tok ++ "expected end of input"
+  [] -> Right ((), [])
 
 peekKind :: Parser (Maybe TokenKind)
-peekKind =
-  Parser $ \case
-    tokens@(Token TEOF _ : _) -> Right (Nothing, tokens)
-    tokens@(tok : _) -> Right (Just (tokenKind tok), tokens)
-    [] -> Right (Nothing, [])
+peekKind = Parser $ \case
+  tokens@(Token TEOF _ : _) -> Right (Nothing, tokens)
+  tokens@(tok : _) -> Right (Just (tokenKind tok), tokens)
+  [] -> Right (Nothing, [])
 
 anyToken :: Parser Token
-anyToken =
-  Parser $ \case
-    tok : rest -> Right (tok, rest)
-    [] -> Left "unexpected end of input"
+anyToken = Parser $ \case
+  tok : rest -> Right (tok, rest)
+  [] -> Left "unexpected end of input"
 
 lookaheadSymbol :: String -> Parser ()
-lookaheadSymbol expected =
-  Parser $ \case
-    tokens@(Token (TSymbol value) _ : _)
-      | value == expected -> Right ((), tokens)
-    tok : _ -> Left $ here tok ++ "expected " ++ expected
-    [] -> Left $ "unexpected end of input, expected " ++ expected
+lookaheadSymbol expected = Parser $ \case
+  tokens@(Token (TSymbol value) _ : _)
+    | value == expected -> Right ((), tokens)
+  tok : _ -> Left $ here tok ++ "expected " ++ expected
+  [] -> Left $ "unexpected end of input, expected " ++ expected
+
+failP :: String -> Parser a
+failP message = Parser $ \case
+  tok : _ -> Left $ here tok ++ message
+  [] -> Left message
+
+-- Combinators ----------------------------------------------------------------
 
 parens :: Parser a -> Parser a
 parens body = symbol "(" *> body <* symbol ")"
@@ -614,18 +588,6 @@ brackets body = symbol "[" *> body <* symbol "]"
 braces :: Parser a -> Parser a
 braces body = symbol "{" *> body <* symbol "}"
 
-manyP :: Parser a -> Parser [a]
-manyP parser = someP parser <|> pure []
-
-someP :: Parser a -> Parser [a]
-someP parser = do
-  first <- parser
-  rest <- manyP parser
-  pure (first : rest)
-
-optionalP :: Parser a -> Parser (Maybe a)
-optionalP parser = (Just <$> parser) <|> pure Nothing
-
 optionP :: a -> Parser a -> Parser a
 optionP fallback parser = parser <|> pure fallback
 
@@ -633,22 +595,7 @@ sepByP :: Parser a -> Parser sep -> Parser [a]
 sepByP parser separator = sepBy1P parser separator <|> pure []
 
 sepBy1P :: Parser a -> Parser sep -> Parser [a]
-sepBy1P parser separator = do
-  first <- parser
-  rest <- manyP (separator *> parser)
-  pure (first : rest)
-
-choiceP :: [Parser a] -> Parser a
-choiceP [] = Parser $ \case
-  tok : _ -> Left $ here tok ++ "no parser alternative matched"
-  [] -> Left "unexpected end of input"
-choiceP (parser : parsers) = parser <|> choiceP parsers
-
-(<|>) :: Parser a -> Parser a -> Parser a
-left <|> right = Parser $ \tokens ->
-  case runParser left tokens of
-    Right value -> Right value
-    Left _ -> runParser right tokens
+sepBy1P parser separator = (:) <$> parser <*> many (separator *> parser)
 
 (<?>) :: Parser a -> String -> Parser a
 parser <?> expected = Parser $ \tokens ->

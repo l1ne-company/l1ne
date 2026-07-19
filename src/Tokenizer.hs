@@ -7,6 +7,9 @@ module Tokenizer
 where
 
 import Data.Char (isAlpha, isAlphaNum, isDigit, isHexDigit, isOctDigit)
+import Data.List (find, isInfixOf, isPrefixOf, sortOn, stripPrefix)
+import Data.Maybe (listToMaybe)
+import Data.Ord (Down (..))
 
 data Position = Position
   { posLine :: Int,
@@ -46,21 +49,21 @@ data LexState = LexState
   }
 
 tokenize :: FilePath -> String -> Either String [Token]
-tokenize path source = do
-  state <- go (LexState 1 1 0 0 False []) source
-  let withEof = insertSemiAtEof state
-  Right . reverse $ Token TEOF (position withEof) : lsTokensRev withEof
+tokenize path source = finish <$> go (LexState 1 1 0 0 False []) source
   where
+    finish state =
+      let withEof = insertSemiAtEof state
+       in reverse (Token TEOF (position withEof) : lsTokensRev withEof)
+
     failAt st message = Left $ path ++ ":" ++ show (position st) ++ ": " ++ message
 
     go st [] = Right st
     go st input@(c : cs)
-      | c == '\n' = go (newline path st cs) cs
+      | c == '\n' = go (newline st cs) cs
       | c == ' ' || c == '\t' || c == '\r' = go (advance st c) cs
-      | take 3 input == "///" = uncurry go (skipLineComment (advanceN st "///") (drop 3 input))
-      | take 2 input == "//" = uncurry go (skipLineComment (advanceN st "//") (drop 2 input))
-      | take 2 input == "/*" = skipBlockComment path (advanceN st "/*") 1 (drop 2 input) >>= uncurry go
-      | isIdentStart c = scanIdent path st input >>= uncurry go
+      | Just rest <- stripPrefix "//" input = uncurry go (skipLineComment (advanceN st "//") rest)
+      | Just rest <- stripPrefix "/*" input = skipBlockComment (advanceN st "/*") 1 rest >>= uncurry go
+      | isIdentStart c = uncurry go (scanIdent st input)
       | isDigit c = scanNumber path st input >>= uncurry go
       | c == '"' = scanString path st cs >>= uncurry go
       | c == '\'' = scanChar path st cs >>= uncurry go
@@ -71,15 +74,14 @@ tokenize path source = do
     skipLineComment st rest@('\n' : _) = (st, rest)
     skipLineComment st (x : xs) = skipLineComment (advance st x) xs
 
-    skipBlockComment :: FilePath -> LexState -> Int -> String -> Either String (LexState, String)
-    skipBlockComment _ st 0 rest = Right (st, rest)
-    skipBlockComment p st _ [] =
-      failAt st ("unterminated block comment in " ++ p)
-    skipBlockComment p st depth input
-      | take 2 input == "/*" = skipBlockComment p (advanceN st "/*") (depth + 1) (drop 2 input)
-      | take 2 input == "*/" = skipBlockComment p (advanceN st "*/") (depth - 1) (drop 2 input)
-    skipBlockComment p st depth (x : xs) =
-      skipBlockComment p (advance st x) depth xs
+    skipBlockComment :: LexState -> Int -> String -> Either String (LexState, String)
+    skipBlockComment st 0 rest = Right (st, rest)
+    skipBlockComment st _ [] = failAt st "unterminated block comment"
+    skipBlockComment st depth input
+      | Just rest <- stripPrefix "/*" input = skipBlockComment (advanceN st "/*") (depth + 1) rest
+      | Just rest <- stripPrefix "*/" input = skipBlockComment (advanceN st "*/") (depth - 1) rest
+    skipBlockComment st depth (x : xs) =
+      skipBlockComment (advance st x) depth xs
 
 isIdentStart :: Char -> Bool
 isIdentStart c = isAlpha c || c == '_'
@@ -117,58 +119,57 @@ keywords =
     "false"
   ]
 
-scanIdent :: FilePath -> LexState -> String -> Either String (LexState, String)
-scanIdent _ st input =
-  let (name, rest0) = span isIdentPart input
-      (kind, rest)
-        | name == "exists" && take 1 rest0 == "!" = (TKeyword "exists!", drop 1 rest0)
-        | name `elem` keywords = (TKeyword name, rest0)
-        | otherwise = (TIdent name, rest0)
-   in Right (emit (advanceN st (take (length input - length rest) input)) kind, rest)
+scanIdent :: LexState -> String -> (LexState, String)
+scanIdent st input =
+  let (name, afterName) = span isIdentPart input
+      (kind, consumed, rest)
+        | name == "exists", Just bang <- stripPrefix "!" afterName = (TKeyword "exists!", name ++ "!", bang)
+        | name `elem` keywords = (TKeyword name, name, afterName)
+        | otherwise = (TIdent name, name, afterName)
+   in (emit (advanceN st consumed) kind, rest)
 
 scanNumber :: FilePath -> LexState -> String -> Either String (LexState, String)
 scanNumber path st input =
   case input of
     '0' : base : rest
-      | base == 'x' || base == 'X' -> based isHexDigit rest 2
-      | base == 'b' || base == 'B' -> based (`elem` ("01" :: String)) rest 2
-      | base == 'o' || base == 'O' -> based isOctDigit rest 2
+      | base `elem` ("xX" :: String) -> based isHexDigit rest
+      | base `elem` ("bB" :: String) -> based (`elem` ("01" :: String)) rest
+      | base `elem` ("oO" :: String) -> based isOctDigit rest
     _ -> decimal
   where
     failAt message = Left $ path ++ ":" ++ show (position st) ++ ": " ++ message
-    based ok rest prefixLen =
+    based ok rest =
       let (digits, suffix) = span (\c -> ok c || c == '_') rest
        in if validSeparated ok digits
-            then Right (finish TInt (prefixLen + length digits) suffix)
+            then Right (finish TInt (2 + length digits) suffix)
             else failAt "invalid numeric literal"
     decimal =
-      let (whole, rest1) = span (\c -> isDigit c || c == '_') input
-          hasFrac = take 1 rest1 == "." && take 2 rest1 /= ".." && restHasDigit (drop 1 rest1)
-          (frac, rest2) = if hasFrac then span (\c -> isDigit c || c == '_') (drop 1 rest1) else ("", rest1)
+      let (whole, rest1) = span digitish input
+          hasFrac =
+            "." `isPrefixOf` rest1
+              && not (".." `isPrefixOf` rest1)
+              && maybe False isDigit (listToMaybe (drop 1 rest1))
+          (frac, rest2) = if hasFrac then span digitish (drop 1 rest1) else ("", rest1)
        in if validSeparated isDigit whole && (not hasFrac || validSeparated isDigit frac)
             then
               let width = length whole + if hasFrac then 1 + length frac else 0
                   kind = if hasFrac then TFloat else TInt
                in Right (finish kind width rest2)
             else failAt "invalid numeric literal"
-    restHasDigit (d : _) = isDigit d
-    restHasDigit _ = False
+    digitish c = isDigit c || c == '_'
     finish kind width rest =
       let text = take width input
        in (emit (advanceN st text) (kind text), rest)
 
 validSeparated :: (Char -> Bool) -> String -> Bool
 validSeparated ok text =
-  case text of
-    [] -> False
-    first : _ ->
+  case (text, reverse text) of
+    (first : _, final : _) ->
       ok first
-        && ok (last text)
-        && all valid (zip text (drop 1 text))
-  where
-    valid ('_', b) = ok b
-    valid (a, '_') = ok a
-    valid (a, _) = ok a || a == '_'
+        && ok final
+        && all (\c -> ok c || c == '_') text
+        && not ("__" `isInfixOf` text)
+    _ -> False
 
 scanString :: FilePath -> LexState -> String -> Either String (LexState, String)
 scanString path st = loop (advance st '"') []
@@ -203,75 +204,72 @@ scanRawString path st = loop (advance st '`') []
     loop cur acc (c : rest) = loop (advance cur c) (c : acc) rest
 
 escape :: Char -> Maybe Char
-escape 'n' = Just '\n'
-escape 'r' = Just '\r'
-escape 't' = Just '\t'
-escape '\\' = Just '\\'
-escape '"' = Just '"'
-escape '\'' = Just '\''
-escape '0' = Just '\0'
-escape _ = Nothing
+escape c =
+  lookup
+    c
+    [ ('n', '\n'),
+      ('r', '\r'),
+      ('t', '\t'),
+      ('\\', '\\'),
+      ('"', '"'),
+      ('\'', '\''),
+      ('0', '\0')
+    ]
 
 scanSymbol :: FilePath -> LexState -> String -> Either String (LexState, String)
 scanSymbol path st input =
-  case longest symbols input of
-    Just symbol ->
-      let st' = advanceN st symbol
-       in Right (emitSymbol st' symbol, drop (length symbol) input)
+  case find (`isPrefixOf` input) symbols of
+    Just sym -> Right (emitSymbol (advanceN st sym) sym, drop (length sym) input)
     Nothing -> Left $ path ++ ":" ++ show (position st) ++ ": unknown punctuation " ++ take 1 input
-  where
-    symbols =
-      [ "..=",
-        "::",
-        "=>",
-        "->",
-        "**",
-        "==",
-        "!=",
-        "<=",
-        ">=",
-        "..",
-        "{",
-        "}",
-        "(",
-        ")",
-        "[",
-        "]",
-        ".",
-        ",",
-        ":",
-        ";",
-        "=",
-        "|",
-        "+",
-        "-",
-        "*",
-        "/",
-        "%",
-        "<",
-        ">",
-        "@"
-      ]
 
-longest :: [String] -> String -> Maybe String
-longest options input =
-  case filter (`prefixOf` input) options of
-    [] -> Nothing
-    matches -> Just (foldr longer "" matches)
-  where
-    longer a b = if length a >= length b then a else b
-    prefixOf prefix value = take (length prefix) value == prefix
+-- Ordered longest-first so that prefix search implements maximal munch.
+symbols :: [String]
+symbols =
+  sortOn
+    (Down . length)
+    [ "..=",
+      "::",
+      "=>",
+      "->",
+      "**",
+      "==",
+      "!=",
+      "<=",
+      ">=",
+      "..",
+      "{",
+      "}",
+      "(",
+      ")",
+      "[",
+      "]",
+      ".",
+      ",",
+      ":",
+      ";",
+      "=",
+      "|",
+      "+",
+      "-",
+      "*",
+      "/",
+      "%",
+      "<",
+      ">",
+      "@"
+    ]
 
 emitSymbol :: LexState -> String -> LexState
 emitSymbol st ";" = emitRaw st TSemi False
 emitSymbol st symbol =
   emitRaw
-    (case symbol of
-       "(" -> st {lsParenDepth = lsParenDepth st + 1}
-       ")" -> st {lsParenDepth = max 0 (lsParenDepth st - 1)}
-       "[" -> st {lsBracketDepth = lsBracketDepth st + 1}
-       "]" -> st {lsBracketDepth = max 0 (lsBracketDepth st - 1)}
-       _ -> st)
+    ( case symbol of
+        "(" -> st {lsParenDepth = lsParenDepth st + 1}
+        ")" -> st {lsParenDepth = max 0 (lsParenDepth st - 1)}
+        "[" -> st {lsBracketDepth = lsBracketDepth st + 1}
+        "]" -> st {lsBracketDepth = max 0 (lsBracketDepth st - 1)}
+        _ -> st
+    )
     (TSymbol symbol)
     (symbol `elem` endSymbols)
 
@@ -300,8 +298,8 @@ canEnd _ = False
 endSymbols :: [String]
 endSymbols = [")", "]", "}"]
 
-newline :: FilePath -> LexState -> String -> LexState
-newline _ st rest =
+newline :: LexState -> String -> LexState
+newline st rest =
   let advanced = st {lsLine = lsLine st + 1, lsColumn = 1}
    in if shouldInsertSemi st rest
         then emitRaw advanced TSemi False
@@ -318,13 +316,10 @@ nextDoesNotContinue :: String -> Bool
 nextDoesNotContinue input =
   case dropWhile (`elem` (" \t\r\n" :: String)) input of
     "" -> True
-    c : _
+    rest@(c : _)
       | c `elem` ("}),].|" :: String) -> False
-    'e' : 'l' : 's' : 'e' : rest -> not (maybe False isIdentPart (safeHead rest))
-    _ -> True
-  where
-    safeHead [] = Nothing
-    safeHead (x : _) = Just x
+      | Just after <- stripPrefix "else" rest -> maybe True (not . isIdentPart) (listToMaybe after)
+      | otherwise -> True
 
 insertSemiAtEof :: LexState -> LexState
 insertSemiAtEof st
